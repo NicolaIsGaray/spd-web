@@ -1,16 +1,20 @@
 // Package platform reúne la infraestructura común a todos los microservicios: configuración
-// por variables de entorno, logging estructurado y servidor HTTP (Gin) con apagado ordenado.
-// No contiene lógica de dominio: cada servicio es dueño de la suya.
+// por variables de entorno (y archivo .env), logging estructurado y servidor HTTP (Gin) con
+// apagado ordenado. No contiene lógica de dominio: cada servicio es dueño de la suya.
 package platform
 
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 // Env lee la configuración de variables de entorno con valores por defecto. En lugar de
@@ -18,6 +22,31 @@ import (
 // al arrancar (fail fast).
 type Env struct {
 	errs []error
+}
+
+// LoadDotEnv carga en el entorno del proceso las variables del archivo .env indicado
+// (godotenv) y devuelve si existía. Las variables ya definidas en el entorno tienen prioridad,
+// así que un despliegue puede cambiar cualquier valor sin tocar el archivo. Que no exista no
+// es un error (en producción la configuración suele llegar por el entorno); que esté mal
+// formado, sí. Debe llamarse antes de leer cualquier variable.
+func (e *Env) LoadDotEnv(path string) bool {
+	if err := godotenv.Load(path); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			e.errs = append(e.errs, fmt.Errorf("%s: %w", path, err))
+		}
+		return false
+	}
+	// Gin lee GIN_MODE en su init(), antes de que se cargue el archivo: si venía en él, se
+	// aplica ahora.
+	if mode := e.String(gin.EnvGinMode, ""); mode != "" && mode != gin.Mode() {
+		switch mode {
+		case gin.DebugMode, gin.ReleaseMode, gin.TestMode:
+			gin.SetMode(mode)
+		default:
+			e.fail(gin.EnvGinMode, mode, "debug, release o test")
+		}
+	}
+	return true
 }
 
 // String devuelve la variable key, o def si no está definida o está vacía.

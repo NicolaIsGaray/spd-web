@@ -1,6 +1,6 @@
 # spd-web · backend
 
-Sincronización de presentaciones en tiempo real. Un presentador sube un `.zip` de imágenes o un `.pptx`, controla qué diapositiva se muestra y todos los visores conectados por WebSocket la ven cambiar al instante.
+Sincronización de presentaciones en tiempo real. Un presentador sube un `.pptx` o un `.pdf`, que el servidor convierte en una imagen por diapositiva; después controla qué diapositiva se muestra y todos los visores conectados por WebSocket la ven cambiar al instante.
 
 ## Arquitectura
 
@@ -15,8 +15,8 @@ Tres microservicios, cada uno dueño de un dominio y desplegable por separado:
         │ /api/presentaciones/:id/slides/:n  │
         ▼                                    ▼
   presentations :8081   ◄── HTTP ───   realtime :8082
-  subida, ZIP, PPTX,     (slide_count)  Hub: sesiones en memoria,
-  imágenes                              WebSockets y control
+  subida y conversión    (slide_count)  Hub: sesiones en memoria,
+  PPTX/PDF → PNG                        WebSockets y control
         │
         ▼
   UPLOAD_DIR/<uuid>/001.png, 002.png…
@@ -25,7 +25,7 @@ Tres microservicios, cada uno dueño de un dominio y desplegable por separado:
 | Servicio        | Dominio                                                           | Puerto |
 |-----------------|-------------------------------------------------------------------|--------|
 | `gateway`       | Punto de entrada: enruta cada endpoint al servicio dueño          | 8080   |
-| `presentations` | Archivos: subida, descompresión, conversión PPTX, imágenes        | 8081   |
+| `presentations` | Archivos: subida, conversión de PPTX y PDF a PNG, imágenes        | 8081   |
 | `realtime`      | Sesiones en vivo: diapositiva actual, visores WebSocket, control  | 8082   |
 
 Los servicios no comparten disco ni memoria: `realtime` solo conoce las presentaciones
@@ -33,14 +33,14 @@ consultando la API de `presentations`.
 
 ```
 backend/
-├── internal/platform/          infraestructura común: config, logs, servidor Gin, apagado
+├── internal/platform/          infraestructura común: config (entorno y .env), logs, servidor  Gin, apagado
 └── services/
     ├── gateway/                main.go + internal/gateway (proxy inverso, CORS)
     ├── presentations/          main.go + internal/
     │   ├── api/                handlers REST
     │   ├── presentation/       casos de uso (crear, consultar, resolver diapositiva)
-    │   ├── storage/            servicio de archivos: ZIP seguro, orden, publicación atómica
-    │   └── convert/            PPTX → PDF (LibreOffice) → PNG (pdftoppm)
+    │   ├── storage/            servicio de archivos: guardado con límite, orden, publicación atómica
+    │   └── convert/            PPTX → PDF (LibreOffice) → PNG (pdftoppm); un PDF va directo a pdftoppm
     └── realtime/               main.go + internal/
         ├── hub/                patrón Hub: estado y difusión, sin locks
         ├── api/                endpoint de control + bucles de lectura/escritura del WebSocket
@@ -56,15 +56,17 @@ saltar por accidente.
 Requisitos:
 
 - Go 1.26 o superior.
-- Para subir `.pptx`: LibreOffice (`soffice`) y poppler (`pdftoppm`). Sin ellos, las subidas
-  `.zip` funcionan igual y las `.pptx` responden 503.
+- poppler (`pdftoppm`) para convertir cualquier subida y, además, LibreOffice (`soffice`) para
+  los `.pptx`. Si falta alguno, las subidas que lo necesitan responden 503: sin LibreOffice,
+  los `.pdf` funcionan igual.
 
 ```sh
-make run          # los tres servicios en paralelo; Ctrl+C los detiene
-make run-gateway  # o cada uno por separado: run-presentations, run-realtime
-make build        # binarios en bin/
-make test         # todos los tests (los de LibreOffice se omiten si no está instalado)
-make test-race    # con el detector de carreras
+cp .env.example .env  # configuración local (ver Configuración)
+make run              # los tres servicios en paralelo; Ctrl+C los detiene
+make run-gateway      # o cada uno por separado: run-presentations, run-realtime
+make build            # binarios en bin/
+make test             # todos los tests (los de LibreOffice y pdftoppm se omiten si no están instalados)
+make test-race        # con el detector de carreras
 ```
 
 El frontend solo habla con el gateway (`http://localhost:8080`). Por defecto se admite el
@@ -76,11 +78,12 @@ Todas las rutas pasan por el gateway. Los errores siempre tienen la forma `{"err
 
 ### `POST /api/presentaciones/upload`
 
-Cuerpo `multipart/form-data` con el campo `file`: un `.zip` con imágenes (png, jpg, webp,
-gif) o un `.pptx`.
+Cuerpo `multipart/form-data` con el campo `file`: un `.pptx` o un `.pdf`. El formato se
+deduce de la extensión, y el contenido tiene que corresponder a ella.
 
 ```sh
-curl -F file=@diapositivas.zip http://localhost:8080/api/presentaciones/upload
+curl -F file=@presentacion.pptx http://localhost:8080/api/presentaciones/upload
+curl -F file=@informe.pdf http://localhost:8080/api/presentaciones/upload
 ```
 
 ```json
@@ -93,20 +96,19 @@ curl -F file=@diapositivas.zip http://localhost:8080/api/presentaciones/upload
 }
 ```
 
-| Estado | Motivo                                                                 |
-|--------|------------------------------------------------------------------------|
-| 201    | Creada (cabecera `Location`)                                           |
-| 400    | ZIP dañado o manipulado, imagen falsa, PPTX inválido, falta `file`     |
-| 413    | Supera `MAX_UPLOAD_MB` u otro límite (diapositivas, tamaño descomprimido) |
-| 415    | Extensión distinta de `.zip` o `.pptx`                                 |
-| 422    | LibreOffice no pudo convertir el PPTX                                  |
-| 503    | El servidor no tiene LibreOffice o pdftoppm                            |
+| Estado | Motivo                                                                             |
+|--------|------------------------------------------------------------------------------------|
+| 201    | Creada (cabecera `Location`)                                                       |
+| 400    | Contenido que no corresponde a la extensión (PPTX o PDF inválido), falta `file`    |
+| 413    | Supera `MAX_UPLOAD_MB` u otro límite (diapositivas, tamaño descomprimido del PPTX) |
+| 415    | Extensión distinta de `.pptx` o `.pdf` (los `.zip` de imágenes ya no se admiten)   |
+| 422    | No se pudo convertir: documento dañado o cifrado, o se superó `CONVERT_TIMEOUT`    |
+| 503    | El servidor no tiene pdftoppm o, para un `.pptx`, LibreOffice                      |
 
-Las imágenes se ordenan por su nombre dentro del ZIP y se renombran `001.png`, `002.png`…
-El orden es lexicográfico, pero los números se comparan por valor. Por eso
-`Diapositiva2.PNG` va antes que `Diapositiva10.PNG`, que es como exporta PowerPoint. Con
-nombres rellenados con ceros (`001`, `002`…) el resultado es idéntico al orden
-lexicográfico puro.
+Cada diapositiva del PPTX, o cada página del PDF, se renderiza como PNG con el lado mayor de
+`RENDER_MAX_PX` píxeles y se guarda como `001.png`, `002.png`… en el orden del documento. Un
+PPTX pasa por LibreOffice (PPTX → PDF) y después por pdftoppm (PDF → PNG); un PDF va directo
+a pdftoppm.
 
 ### `GET /api/presentaciones/:id`
 
@@ -164,7 +166,20 @@ Códigos de cierre que el frontend puede leer en `event.code`:
 
 ## Configuración
 
-Por variables de entorno. Todas tienen un valor por defecto pensado para desarrollo local.
+Por variables de entorno o en un archivo `.env`. Todas tienen un valor por defecto pensado
+para desarrollo local.
+
+Al arrancar, cada servicio carga con [godotenv](https://github.com/joho/godotenv) el `.env`
+de su directorio de trabajo (`backend/` si se lanza con `make`). `.env.example` es la
+plantilla con lo que se suele ajustar: las URL de los servicios a los que enruta el gateway,
+la carpeta de subidas (`UPLOAD_DIR`) y el tamaño máximo de archivo en MB (`MAX_UPLOAD_MB`).
+
+- Las variables definidas en el entorno tienen prioridad sobre el archivo: un despliegue
+  puede cambiar cualquier valor sin tocarlo.
+- Si no hay `.env`, se usan el entorno y los valores por defecto (en producción lo normal es
+  no tenerlo). Si está mal formado, el servicio no arranca e indica el error.
+- Cualquier variable de la tabla puede ir en el `.env`, incluida `GIN_MODE`.
+
 
 | Variable                     | Servicio             | Defecto                  |
 |------------------------------|----------------------|--------------------------|
@@ -175,9 +190,9 @@ Por variables de entorno. Todas tienen un valor por defecto pensado para desarro
 | `PRESENTATIONS_URL`          | gateway, realtime    | `http://localhost:8081`  |
 | `REALTIME_URL`               | gateway              | `http://localhost:8082`  |
 | `UPLOAD_DIR`                 | presentations        | `./uploads`              |
-| `MAX_UPLOAD_MB`              | presentations        | `100`                    |
-| `MAX_SLIDES`                 | presentations        | `500`                    |
-| `MAX_EXTRACTED_MB`           | presentations        | `1024`                   |
+| `MAX_UPLOAD_MB`              | presentations        | `10` (tamaño máximo del archivo subido) |
+| `MAX_SLIDES`                 | presentations        | `500` (diapositivas o páginas por presentación) |
+| `MAX_EXTRACTED_MB`           | presentations        | `1024` (tamaño descomprimido de un PPTX) |
 | `SOFFICE_BIN`, `PDFTOPPM_BIN`| presentations        | `soffice`, `pdftoppm`    |
 | `CONVERT_TIMEOUT`            | presentations        | `3m`                     |
 | `MAX_CONCURRENT_CONVERSIONS` | presentations        | `2`                      |
@@ -197,17 +212,22 @@ lento no frena a nadie. Por conexión hay dos goroutines: una única escritora, 
 mensaje y ping cada 30 s, y una lectora, que procesa los pong y el cierre. Las consultas de
 red al catálogo se hacen fuera del bucle del Hub.
 
-**Seguridad de las subidas.** Los nombres de las entradas del ZIP nunca se usan como rutas,
-lo que evita el Zip Slip. Los límites de entradas, imágenes y bytes descomprimidos se
-imponen durante la copia, lo que frena las zip bombs. Se verifican los magic bytes de cada
-imagen, y un PPTX debe ser un OOXML real antes de pasar por LibreOffice. Cada subida trabaja
-en `UPLOAD_DIR/.staging/<uuid>` y se publica con un `rename` atómico, así que nunca se ve una
-presentación a medias.
+**Seguridad de las subidas.** Solo se aceptan `.pptx` y `.pdf`, y el contenido se comprueba
+antes de llegar al conversor. Un PPTX debe ser un paquete OOXML real (con
+`ppt/presentation.xml`), con un número de partes acotado y un tamaño descomprimido declarado
+que no supere `MAX_EXTRACTED_MB`, lo que frena las zip bombs. Un PDF debe empezar por la firma
+`%PDF-`. El archivo se copia a disco en streaming, sin cargarlo en memoria, y la copia se corta
+al superar `MAX_UPLOAD_MB`. Las imágenes que genera el conversor se verifican por sus magic
+bytes antes de publicarse. Cada subida trabaja en `UPLOAD_DIR/.staging/<uuid>` y se publica con
+un `rename` atómico, así que nunca se ve una presentación a medias.
 
-**LibreOffice.** Convertir directamente a PNG solo exporta la primera diapositiva. Por eso se
-convierte a PDF y se rasteriza cada página con `pdftoppm`. Las conversiones simultáneas están
-limitadas y cada una usa un perfil de LibreOffice propio. Si se agota el tiempo, se mata el
-grupo de procesos completo, sin dejar `soffice.bin` huérfanos.
+**Conversión.** Convertir un PPTX directamente a PNG con LibreOffice solo exporta la primera
+diapositiva. Por eso se convierte a PDF y se rasteriza cada página con `pdftoppm`. Un PDF
+subido se salta LibreOffice y va directo a `pdftoppm`: se convierte más rápido y no necesita
+LibreOffice instalado. Las conversiones simultáneas de ambos formatos están limitadas
+(`MAX_CONCURRENT_CONVERSIONS`), cada una usa un perfil de LibreOffice propio y se renderizan
+como mucho `MAX_SLIDES` + 1 páginas. Si se agota el tiempo, se mata el grupo de procesos
+completo, sin dejar `soffice.bin` huérfanos.
 
 **Apagado ordenado.** Ante SIGTERM, cada servicio deja de aceptar conexiones y espera a las
 peticiones en curso. `realtime` además envía a cada visor un cierre 1001. Si un visor no lo
@@ -221,5 +241,5 @@ confirma en 3 s, cierra su conexión de forma forzada.
 - **`realtime` guarda el estado en memoria.** Debe ejecutarse una sola instancia, o enrutar
   cada presentación siempre a la misma instancia. Para escalar en horizontal haría falta un
   bus compartido (Redis Pub/Sub, NATS).
-- LibreOffice procesa documentos no confiables. En producción conviene ejecutar
+- LibreOffice y pdftoppm procesan documentos no confiables. En producción conviene ejecutar
   `presentations` en un contenedor aislado y sin salida a internet.

@@ -16,7 +16,11 @@ import (
 
 func main() {
 	var env platform.Env
+	dotenv := env.LoadDotEnv(".env")
 	log := platform.NewLogger("gateway", &env)
+	if dotenv {
+		log.Info("variables de entorno cargadas", "archivo", ".env")
+	}
 	if err := run(log, &env); err != nil {
 		log.Error("el servicio terminó con error", "err", err)
 		os.Exit(1)

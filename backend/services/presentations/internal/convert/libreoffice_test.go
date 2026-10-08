@@ -17,14 +17,14 @@ import (
 )
 
 // Tests de integración: usan LibreOffice y pdftoppm reales. Se omiten con -short o si los
-// binarios no están instalados.
+// binarios que necesitan no están instalados (los de PDF solo necesitan pdftoppm).
 
-func requireBinaries(t *testing.T) {
+func requireBinaries(t *testing.T, bins ...string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("test de integración: omitido con -short")
 	}
-	for _, bin := range []string{"soffice", "pdftoppm"} {
+	for _, bin := range bins {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s no está instalado", bin)
 		}
@@ -89,6 +89,61 @@ func fodp(slides int) string {
 </office:document>`
 }
 
+// pdfOf genera un PDF válido de n páginas en blanco del tamaño de una diapositiva 16:9
+// (960×540 puntos), escrito a mano para no depender de LibreOffice.
+func pdfOf(n int) []byte {
+	var buf bytes.Buffer
+	var offsets []int // posición de cada objeto, para la tabla xref
+	obj := func(body string) {
+		offsets = append(offsets, buf.Len())
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", len(offsets), body)
+	}
+	buf.WriteString("%PDF-1.4\n")
+	kids := make([]string, n)
+	for i := range kids {
+		kids[i] = fmt.Sprintf("%d 0 R", i+3) // 1 es el catálogo y 2 el árbol de páginas
+	}
+	obj("<< /Type /Catalog /Pages 2 0 R >>")
+	obj(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), n))
+	for range n {
+		obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] /Resources << >> >>")
+	}
+	xref := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n0000000000 65535 f \n", len(offsets)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(offsets)+1, xref)
+	return buf.Bytes()
+}
+
+func writePDF(t *testing.T, pages int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "source.pdf")
+	if err := os.WriteFile(path, pdfOf(pages), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// assertPNGPages comprueba que hay want páginas y que cada una es un PNG cuyo lado mayor mide side.
+func assertPNGPages(t *testing.T, pages []string, want, side int) {
+	t.Helper()
+	if len(pages) != want {
+		t.Fatalf("páginas = %d (%v), se esperaban %d", len(pages), pages, want)
+	}
+	for _, p := range pages {
+		data, _ := os.ReadFile(p)
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("%s no es un PNG válido: %v", p, err)
+		}
+		if max(cfg.Width, cfg.Height) != side {
+			t.Fatalf("%s mide %dx%d; el lado mayor debería ser %d", p, cfg.Width, cfg.Height, side)
+		}
+	}
+}
+
 func newConverter(t *testing.T, opts Options) *LibreOffice {
 	t.Helper()
 	if opts.SofficeBin == "" {
@@ -125,7 +180,7 @@ func copyFixture(t *testing.T) string {
 }
 
 func TestToImagesRendersEverySlide(t *testing.T) {
-	requireBinaries(t)
+	requireBinaries(t, "soffice", "pdftoppm")
 	lo := newConverter(t, Options{MaxConcurrent: 1})
 	src := copyFixture(t)
 
@@ -133,24 +188,25 @@ func TestToImagesRendersEverySlide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pages) != 3 {
-		t.Fatalf("páginas = %d (%v), se esperaban 3", len(pages), pages)
+	assertPNGPages(t, pages, 3, 640)
+}
+
+// Un PDF va directo a pdftoppm: se convierte aunque LibreOffice no esté instalado.
+func TestToImagesRendersPDFWithoutLibreOffice(t *testing.T) {
+	requireBinaries(t, "pdftoppm")
+	lo := newConverter(t, Options{SofficeBin: "soffice-que-no-existe", MaxConcurrent: 1})
+	src := writePDF(t, 3)
+
+	pages, err := lo.ToImages(context.Background(), src, t.TempDir(), 100)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, p := range pages {
-		data, _ := os.ReadFile(p)
-		cfg, err := png.DecodeConfig(bytes.NewReader(data))
-		if err != nil {
-			t.Fatalf("%s no es un PNG válido: %v", p, err)
-		}
-		if max(cfg.Width, cfg.Height) != 640 {
-			t.Fatalf("%s mide %dx%d; el lado mayor debería ser 640", p, cfg.Width, cfg.Height)
-		}
-	}
+	assertPNGPages(t, pages, 3, 640)
 }
 
 // Dos conversiones simultáneas deben funcionar: cada una usa su propio perfil de LibreOffice.
 func TestConcurrentConversionsUseIsolatedProfiles(t *testing.T) {
-	requireBinaries(t)
+	requireBinaries(t, "soffice", "pdftoppm")
 	lo := newConverter(t, Options{MaxConcurrent: 2})
 
 	var wg sync.WaitGroup
@@ -174,12 +230,13 @@ func TestConcurrentConversionsUseIsolatedProfiles(t *testing.T) {
 	}
 }
 
+// El límite de páginas lo aplica pdftoppm, paso común a PPTX y PDF: basta con probarlo con un PDF.
 func TestToImagesStopsAfterMaxPagesPlusOne(t *testing.T) {
-	requireBinaries(t)
+	requireBinaries(t, "pdftoppm")
 	lo := newConverter(t, Options{MaxConcurrent: 1})
-	src := copyFixture(t)
+	src := writePDF(t, 3)
 
-	pages, err := lo.ToImages(context.Background(), src, filepath.Dir(src), 1)
+	pages, err := lo.ToImages(context.Background(), src, t.TempDir(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,13 +246,20 @@ func TestToImagesStopsAfterMaxPagesPlusOne(t *testing.T) {
 }
 
 func TestMissingBinaries(t *testing.T) {
-	lo := newConverter(t, Options{SofficeBin: "soffice-que-no-existe", MaxConcurrent: 1})
-	if err := lo.Check(); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("Check: err = %v, se esperaba ErrUnavailable", err)
+	noSoffice := newConverter(t, Options{SofficeBin: "soffice-que-no-existe", MaxConcurrent: 1})
+	if err := noSoffice.Check(); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Check sin LibreOffice: err = %v, se esperaba ErrUnavailable", err)
 	}
-	_, err := lo.ToImages(context.Background(), "x.pptx", t.TempDir(), 10)
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("ToImages: err = %v, se esperaba ErrUnavailable", err)
+	if _, err := noSoffice.ToImages(context.Background(), "x.pptx", t.TempDir(), 10); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("PPTX sin LibreOffice: err = %v, se esperaba ErrUnavailable", err)
+	}
+
+	noPdftoppm := newConverter(t, Options{PdftoppmBin: "pdftoppm-que-no-existe", MaxConcurrent: 1})
+	if err := noPdftoppm.Check(); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Check sin pdftoppm: err = %v, se esperaba ErrUnavailable", err)
+	}
+	if _, err := noPdftoppm.ToImages(context.Background(), "x.pdf", t.TempDir(), 10); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("PDF sin pdftoppm: err = %v, se esperaba ErrUnavailable", err)
 	}
 }
 
@@ -226,7 +290,7 @@ func TestTimeoutKillsTheWholeProcessGroup(t *testing.T) {
 // Lo mismo con LibreOffice real: un perfil nuevo tarda varios segundos en inicializarse, así
 // que 1,5 s garantiza que el timeout llega a mitad de la conversión.
 func TestTimeoutWithRealLibreOffice(t *testing.T) {
-	requireBinaries(t)
+	requireBinaries(t, "soffice", "pdftoppm")
 	if runtime.GOOS != "linux" {
 		t.Skip("la comprobación de procesos huérfanos usa /proc")
 	}

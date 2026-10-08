@@ -1,5 +1,5 @@
-// Package convert renderiza documentos de presentación (PPTX) como una imagen por diapositiva
-// usando LibreOffice en modo headless.
+// Package convert renderiza documentos (PPTX y PDF) como una imagen PNG por diapositiva o
+// página: los PPTX pasan por LibreOffice en modo headless y los PDF van directos a pdftoppm.
 package convert
 
 import (
@@ -17,9 +17,9 @@ import (
 
 var (
 	// ErrUnavailable indica que faltan los binarios necesarios en el servidor.
-	ErrUnavailable = errors.New("conversión de PPTX no disponible: el servidor no tiene LibreOffice o pdftoppm")
+	ErrUnavailable = errors.New("conversión no disponible: el servidor no tiene LibreOffice o pdftoppm")
 	// ErrFailed indica que la conversión falló o superó el tiempo máximo.
-	ErrFailed = errors.New("no se pudo convertir el PPTX")
+	ErrFailed = errors.New("no se pudo convertir el documento")
 )
 
 // Options configura el conversor.
@@ -31,10 +31,11 @@ type Options struct {
 	MaxPixels     int           // lado mayor de cada imagen renderizada, en píxeles
 }
 
-// LibreOffice convierte PPTX en imágenes en dos pasos:
+// LibreOffice convierte documentos en imágenes en dos pasos:
 //
-//  1. soffice --convert-to pdf: LibreOffice renderiza todas las diapositivas. (Convertir
-//     directamente a PNG solo exporta la PRIMERA diapositiva, por eso se pasa por PDF.)
+//  1. soffice --convert-to pdf: LibreOffice renderiza todas las diapositivas del PPTX.
+//     (Convertir directamente a PNG solo exporta la PRIMERA diapositiva, por eso se pasa por
+//     PDF.) Un documento que ya es PDF se salta este paso.
 //  2. pdftoppm -png: rasteriza cada página del PDF como una imagen.
 //
 // Es seguro para uso concurrente.
@@ -64,12 +65,14 @@ func NewLibreOffice(opts Options) (*LibreOffice, error) {
 	return &LibreOffice{opts: opts, profileRoot: root, slots: slots}, nil
 }
 
-// Check comprueba que los binarios necesarios están instalados.
+// Check comprueba que los binarios necesarios están instalados: pdftoppm para cualquier
+// documento y, además, LibreOffice para los PPTX.
 func (lo *LibreOffice) Check() error {
-	for _, bin := range []string{lo.opts.SofficeBin, lo.opts.PdftoppmBin} {
-		if _, err := exec.LookPath(bin); err != nil {
-			return fmt.Errorf("%w (%v)", ErrUnavailable, err)
-		}
+	if _, err := exec.LookPath(lo.opts.PdftoppmBin); err != nil {
+		return fmt.Errorf("%w: no se podrá convertir ningún documento (%v)", ErrUnavailable, err)
+	}
+	if _, err := exec.LookPath(lo.opts.SofficeBin); err != nil {
+		return fmt.Errorf("%w: solo se podrán convertir PDF (%v)", ErrUnavailable, err)
 	}
 	return nil
 }
@@ -79,9 +82,11 @@ func (lo *LibreOffice) Close() error {
 	return os.RemoveAll(lo.profileRoot)
 }
 
-// ToImages renderiza cada diapositiva de src como PNG dentro de outDir y devuelve las rutas
-// generadas (sin orden garantizado). Renderiza como mucho maxPages+1 páginas: suficiente para
-// que el llamador detecte que se superó el límite sin trabajar de más.
+// ToImages renderiza cada diapositiva o página de src como PNG dentro de outDir y devuelve las
+// rutas generadas (sin orden garantizado). El formato se deduce de la extensión: un .pdf va
+// directo a pdftoppm y cualquier otro documento (.pptx) pasa antes por LibreOffice. Renderiza
+// como mucho maxPages+1 páginas: suficiente para que el llamador detecte que se superó el
+// límite sin trabajar de más.
 func (lo *LibreOffice) ToImages(ctx context.Context, src, outDir string, maxPages int) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, lo.opts.Timeout)
 	defer cancel()
@@ -97,22 +102,18 @@ func (lo *LibreOffice) ToImages(ctx context.Context, src, outDir string, maxPage
 		return nil, err
 	}
 
-	// Paso 1: PPTX → PDF.
-	err := lo.run(ctx, profile, lo.opts.SofficeBin,
-		"--headless", "--norestore", "--nolockcheck", "--nodefault", "--nofirststartwizard",
-		"-env:UserInstallation="+fileURL(profile),
-		"--convert-to", "pdf", "--outdir", outDir, src)
-	if err != nil {
-		return nil, err
-	}
-	pdf := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))+".pdf")
-	if _, err := os.Stat(pdf); err != nil {
-		return nil, fmt.Errorf("%w: LibreOffice no generó el PDF", ErrFailed)
+	// Paso 1, solo si no es ya un PDF: PPTX → PDF.
+	pdf := src
+	if !strings.EqualFold(filepath.Ext(src), ".pdf") {
+		var err error
+		if pdf, err = lo.toPDF(ctx, profile, src, outDir); err != nil {
+			return nil, err
+		}
 	}
 
 	// Paso 2: PDF → una imagen PNG por página (page-1.png, page-2.png...).
 	prefix := filepath.Join(outDir, "page")
-	err = lo.run(ctx, profile, lo.opts.PdftoppmBin,
+	err := lo.run(ctx, profile, lo.opts.PdftoppmBin,
 		"-png", "-scale-to", strconv.Itoa(lo.opts.MaxPixels),
 		"-l", strconv.Itoa(maxPages+1), pdf, prefix)
 	if err != nil {
@@ -126,6 +127,22 @@ func (lo *LibreOffice) ToImages(ctx context.Context, src, outDir string, maxPage
 		return nil, fmt.Errorf("%w: el documento no tiene páginas", ErrFailed)
 	}
 	return pages, nil
+}
+
+// toPDF convierte src en PDF con LibreOffice y devuelve la ruta del PDF generado en outDir.
+func (lo *LibreOffice) toPDF(ctx context.Context, profile, src, outDir string) (string, error) {
+	err := lo.run(ctx, profile, lo.opts.SofficeBin,
+		"--headless", "--norestore", "--nolockcheck", "--nodefault", "--nofirststartwizard",
+		"-env:UserInstallation="+fileURL(profile),
+		"--convert-to", "pdf", "--outdir", outDir, src)
+	if err != nil {
+		return "", err
+	}
+	pdf := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))+".pdf")
+	if _, err := os.Stat(pdf); err != nil {
+		return "", fmt.Errorf("%w: LibreOffice no generó el PDF", ErrFailed)
+	}
+	return pdf, nil
 }
 
 // run ejecuta un binario externo ligado a ctx: si ctx se cancela (timeout, cliente que se va,

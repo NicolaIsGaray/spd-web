@@ -15,6 +15,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,13 +29,33 @@ import (
 	"spd.web/services/presentations/internal/storage"
 )
 
-type noConverter struct{}
+const maxUpload = 1 << 20
 
-func (noConverter) ToImages(context.Context, string, string, int) ([]string, error) {
-	return nil, presentation.ErrConverterUnavailable
+// minimalPDF basta para pasar la comprobación de firma: el conversor de los tests es falso.
+var minimalPDF = []byte("%PDF-1.7\n%%EOF\n")
+
+// pageConverter simula el conversor: escribe las páginas indicadas como page-1.png, page-2.png...
+type pageConverter struct{ pages [][]byte }
+
+func (c pageConverter) ToImages(_ context.Context, _, outDir string, _ int) ([]string, error) {
+	paths := make([]string, len(c.pages))
+	for i, data := range c.pages {
+		paths[i] = filepath.Join(outDir, "page-"+strconv.Itoa(i+1)+".png")
+		if err := os.WriteFile(paths[i], data, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	return paths, nil
 }
 
-func newServer(t *testing.T, maxUpload int64) *httptest.Server {
+// failingConverter simula un conversor que siempre falla con err.
+type failingConverter struct{ err error }
+
+func (c failingConverter) ToImages(context.Context, string, string, int) ([]string, error) {
+	return nil, c.err
+}
+
+func newServer(t *testing.T, conv presentation.Converter) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	log := slog.New(slog.DiscardHandler)
@@ -40,9 +63,9 @@ func newServer(t *testing.T, maxUpload int64) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	limits := storage.Limits{MaxUploadBytes: maxUpload, MaxEntries: 100, MaxSlides: 20, MaxImageBytes: 1 << 20, MaxTotalBytes: 4 << 20}
+	limits := storage.Limits{MaxUploadBytes: maxUpload, MaxEntries: 100, MaxSlides: 20, MaxTotalBytes: 4 << 20}
 	engine := platform.NewEngine(log)
-	New(presentation.NewService(store, noConverter{}, limits, log), maxUpload, log).Register(engine)
+	New(presentation.NewService(store, conv, limits, log), maxUpload, log).Register(engine)
 	srv := httptest.NewServer(engine)
 	t.Cleanup(srv.Close)
 	return srv
@@ -57,15 +80,17 @@ func pngOf(t *testing.T, width int) []byte {
 	return buf.Bytes()
 }
 
-func zipOf(t *testing.T, files map[string][]byte) []byte {
+// pptxOf genera el PPTX mínimo que acepta el servicio: un paquete OOXML (un contenedor ZIP)
+// con ppt/presentation.xml.
+func pptxOf(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	for name, data := range files {
-		w, _ := zw.Create(name)
-		_, _ = w.Write(data)
+	w, _ := zw.Create("ppt/presentation.xml")
+	_, _ = w.Write([]byte("<p:presentation/>"))
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
 	}
-	_ = zw.Close()
 	return buf.Bytes()
 }
 
@@ -100,43 +125,54 @@ func get(t *testing.T, url string) (*http.Response, []byte) {
 }
 
 func TestUploadAndServeSlides(t *testing.T) {
-	srv := newServer(t, 1<<20)
 	slide1, slide2 := pngOf(t, 1), pngOf(t, 2)
+	srv := newServer(t, pageConverter{pages: [][]byte{slide1, slide2}})
 
-	resp, body := upload(t, srv, "file", "deck.zip", zipOf(t, map[string][]byte{"s2.png": slide2, "s1.png": slide1}))
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("upload: %d %v", resp.StatusCode, body)
+	docs := []struct {
+		filename string
+		data     []byte
+	}{
+		{"informe.pdf", minimalPDF},
+		{"deck.pptx", pptxOf(t)},
 	}
-	id, _ := body["presentation_id"].(string)
-	if id == "" || body["slide_count"].(float64) != 2 {
-		t.Fatalf("respuesta = %v", body)
-	}
-	if loc := resp.Header.Get("Location"); loc != "/api/presentaciones/"+id {
-		t.Fatalf("Location = %q", loc)
-	}
+	for _, doc := range docs {
+		t.Run(doc.filename, func(t *testing.T) {
+			resp, body := upload(t, srv, "file", doc.filename, doc.data)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("upload: %d %v", resp.StatusCode, body)
+			}
+			id, _ := body["presentation_id"].(string)
+			if id == "" || body["slide_count"].(float64) != 2 {
+				t.Fatalf("respuesta = %v", body)
+			}
+			if loc := resp.Header.Get("Location"); loc != "/api/presentaciones/"+id {
+				t.Fatalf("Location = %q", loc)
+			}
 
-	meta, data := get(t, srv.URL+"/api/presentaciones/"+id)
-	if meta.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"file":"002.png"`)) {
-		t.Fatalf("metadatos: %d %s", meta.StatusCode, data)
-	}
+			meta, data := get(t, srv.URL+"/api/presentaciones/"+id)
+			if meta.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"file":"002.png"`)) {
+				t.Fatalf("metadatos: %d %s", meta.StatusCode, data)
+			}
 
-	for _, ref := range []string{"1", "001.png"} {
-		img, data := get(t, srv.URL+"/api/presentaciones/"+id+"/slides/"+ref)
-		if img.StatusCode != http.StatusOK || !bytes.Equal(data, slide1) {
-			t.Fatalf("slide %s: %d (%d bytes)", ref, img.StatusCode, len(data))
-		}
-		if ct := img.Header.Get("Content-Type"); ct != "image/png" {
-			t.Fatalf("Content-Type = %q", ct)
-		}
-		if cc := img.Header.Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
-			t.Fatalf("Cache-Control = %q", cc)
-		}
+			for _, ref := range []string{"1", "001.png"} {
+				img, data := get(t, srv.URL+"/api/presentaciones/"+id+"/slides/"+ref)
+				if img.StatusCode != http.StatusOK || !bytes.Equal(data, slide1) {
+					t.Fatalf("slide %s: %d (%d bytes)", ref, img.StatusCode, len(data))
+				}
+				if ct := img.Header.Get("Content-Type"); ct != "image/png" {
+					t.Fatalf("Content-Type = %q", ct)
+				}
+				if cc := img.Header.Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+					t.Fatalf("Cache-Control = %q", cc)
+				}
+			}
+		})
 	}
 }
 
 func TestErrorResponses(t *testing.T) {
-	srv := newServer(t, 1<<20)
-	resp, body := upload(t, srv, "file", "deck.zip", zipOf(t, map[string][]byte{"s1.png": pngOf(t, 1)}))
+	srv := newServer(t, pageConverter{pages: [][]byte{pngOf(t, 1)}})
+	resp, body := upload(t, srv, "file", "deck.pdf", minimalPDF)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("upload: %d %v", resp.StatusCode, body)
 	}
@@ -147,11 +183,11 @@ func TestErrorResponses(t *testing.T) {
 		data                  []byte
 		want                  int
 	}{
-		{"sin campo file", "documento", "deck.zip", []byte("x"), http.StatusBadRequest},
-		{"formato no soportado", "file", "deck.pdf", []byte("%PDF-1.7"), http.StatusUnsupportedMediaType},
-		{"zip inválido", "file", "deck.zip", []byte("no soy un zip"), http.StatusBadRequest},
-		{"demasiado grande", "file", "deck.zip", make([]byte, 3<<20), http.StatusRequestEntityTooLarge},
-		{"pptx sin conversor", "file", "deck.pptx", zipOf(t, map[string][]byte{"ppt/presentation.xml": nil}), http.StatusServiceUnavailable},
+		{"sin campo file", "documento", "deck.pdf", minimalPDF, http.StatusBadRequest},
+		{"formato no soportado", "file", "deck.odp", []byte("odp"), http.StatusUnsupportedMediaType},
+		{"pdf inválido", "file", "deck.pdf", []byte("no soy un pdf"), http.StatusBadRequest},
+		{"pptx inválido", "file", "deck.pptx", minimalPDF, http.StatusBadRequest},
+		{"demasiado grande", "file", "deck.pdf", make([]byte, 3<<20), http.StatusRequestEntityTooLarge},
 	}
 	for _, tc := range uploads {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,15 +221,40 @@ func TestErrorResponses(t *testing.T) {
 	}
 }
 
+// Los fallos del conversor responden 503 (falta un binario) o 422 (documento que no se pudo
+// convertir) con el mensaje genérico, sin filtrar rutas ni la salida de los procesos.
+func TestConversionErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+		msg  string
+	}{
+		{"sin conversor", fmt.Errorf(`%w (exec: "pdftoppm": executable file not found in $PATH)`, presentation.ErrConverterUnavailable),
+			http.StatusServiceUnavailable, presentation.ErrConverterUnavailable.Error()},
+		{"documento ilegible", fmt.Errorf("%w: pdftoppm: exit status 1: Syntax Error: /srv/uploads/.staging/x/source.pdf", presentation.ErrConversionFailed),
+			http.StatusUnprocessableEntity, presentation.ErrConversionFailed.Error()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newServer(t, failingConverter{err: tc.err})
+			resp, body := upload(t, srv, "file", "deck.pdf", minimalPDF)
+			if resp.StatusCode != tc.want || body["error"] != tc.msg {
+				t.Fatalf("respuesta = %d %v, se esperaba %d {error: %q}", resp.StatusCode, body, tc.want, tc.msg)
+			}
+		})
+	}
+}
+
 // Una subida cortada a mitad (el cliente cierra antes de enviar todo el cuerpo) es un error del
 // cliente: 400, no 500. Se usa una conexión TCP medio cerrada para poder leer la respuesta.
 func TestTruncatedUploadIsAClientError(t *testing.T) {
-	srv := newServer(t, 1<<20)
+	srv := newServer(t, pageConverter{pages: [][]byte{pngOf(t, 1)}})
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
-	fw, _ := mw.CreateFormFile("file", "deck.zip")
-	_, _ = fw.Write(zipOf(t, map[string][]byte{"s1.png": pngOf(t, 1)}))
+	fw, _ := mw.CreateFormFile("file", "deck.pdf")
+	_, _ = fw.Write(append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte("x"), 64<<10)...))
 	_ = mw.Close()
 	truncated := body.Bytes()[:body.Len()/2]
 

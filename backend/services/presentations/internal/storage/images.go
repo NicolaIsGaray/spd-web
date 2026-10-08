@@ -15,23 +15,24 @@ import (
 var (
 	// ErrNotFound indica que la presentación no existe.
 	ErrNotFound = errors.New("no encontrado")
-	// ErrInvalidFile indica un archivo corrupto, manipulado o sin imágenes válidas.
+	// ErrInvalidFile indica un archivo corrupto, manipulado o cuyo contenido no corresponde a
+	// su formato.
 	ErrInvalidFile = errors.New("archivo inválido")
 	// ErrLimitExceeded indica que se superó algún límite de tamaño o cantidad.
 	ErrLimitExceeded = errors.New("límite excedido")
 )
 
-// Limits acota el trabajo que puede provocar un archivo subido (defensa frente a zip bombs).
+// Limits acota el trabajo que puede provocar un archivo subido.
 type Limits struct {
 	MaxUploadBytes int64 // tamaño del archivo subido
-	MaxEntries     int   // entradas de un ZIP/PPTX, incluidas las que no son imágenes
-	MaxSlides      int   // diapositivas por presentación
-	MaxImageBytes  int64 // tamaño descomprimido de una imagen
-	MaxTotalBytes  int64 // tamaño descomprimido de todas las imágenes
+	MaxEntries     int   // partes internas de un PPTX (es un contenedor ZIP)
+	MaxSlides      int   // diapositivas (o páginas de un PDF) por presentación
+	MaxTotalBytes  int64 // tamaño descomprimido declarado de un PPTX (zip bomb)
 }
 
-// imageTypes son los formatos de diapositiva admitidos. SVG queda fuera a propósito: puede
-// contener scripts.
+// imageTypes son los formatos de diapositiva que se publican y se sirven. El conversor genera
+// PNG; el resto se mantiene para seguir sirviendo presentaciones publicadas antes. SVG queda
+// fuera a propósito: puede contener scripts.
 var imageTypes = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
@@ -101,9 +102,10 @@ func WriteFile(path string, r io.Reader, limit int64) (int64, error) {
 	return n, nil
 }
 
-// ImportImages incorpora imágenes generadas en el propio servidor (p. ej. las páginas
-// renderizadas de un PPTX): las ordena, verifica su contenido y las MUEVE a destDir como
-// 001.png, 002.png... Origen y destino deben estar en el mismo sistema de archivos.
+// ImportImages incorpora las imágenes generadas en el propio servidor (las páginas
+// renderizadas de un PPTX o un PDF): las ordena (ver NaturalCompare), verifica su contenido y
+// las MUEVE a destDir como 001.png, 002.png... Origen y destino deben estar en el mismo
+// sistema de archivos.
 func ImportImages(paths []string, destDir string, lim Limits) ([]string, error) {
 	switch {
 	case len(paths) == 0:

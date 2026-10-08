@@ -2,10 +2,14 @@ package platform
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestEnvDefaultsAndValues(t *testing.T) {
@@ -65,6 +69,75 @@ func TestEnvCollectsEveryError(t *testing.T) {
 		if !strings.Contains(err.Error(), key) {
 			t.Fatalf("el error no menciona %s: %v", key, err)
 		}
+	}
+}
+
+// writeDotEnv escribe un archivo .env temporal. godotenv define las variables con os.Setenv, así
+// que antes se registran con t.Setenv (para restaurarlas al terminar) y se dejan sin definir.
+func writeDotEnv(t *testing.T, content string, keys ...string) string {
+	t.Helper()
+	for _, key := range keys {
+		t.Setenv(key, "")
+		_ = os.Unsetenv(key)
+	}
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	path := writeDotEnv(t, "# comentario\nT_FILE=del-archivo\nexport T_QUOTED=\"con espacios\"\nT_BOTH=del-archivo\n",
+		"T_FILE", "T_QUOTED")
+	t.Setenv("T_BOTH", "del-entorno")
+
+	var env Env
+	if !env.LoadDotEnv(path) {
+		t.Fatal("LoadDotEnv no cargó el archivo")
+	}
+	if got := env.String("T_FILE", ""); got != "del-archivo" {
+		t.Fatalf("T_FILE = %q", got)
+	}
+	if got := env.String("T_QUOTED", ""); got != "con espacios" {
+		t.Fatalf("T_QUOTED = %q", got)
+	}
+	if got := env.String("T_BOTH", ""); got != "del-entorno" {
+		t.Fatalf("el entorno debe tener prioridad sobre el archivo: T_BOTH = %q", got)
+	}
+
+	if env.LoadDotEnv(filepath.Join(t.TempDir(), "no-existe.env")) {
+		t.Fatal("LoadDotEnv informó de un archivo que no existe")
+	}
+	if err := env.Err(); err != nil {
+		t.Fatalf("un .env inexistente no es un error: %v", err)
+	}
+}
+
+func TestLoadDotEnvRejectsMalformedFile(t *testing.T) {
+	path := writeDotEnv(t, "T_OK=1\nLINEA_SIN_VALOR\n", "T_OK")
+	var env Env
+	env.LoadDotEnv(path)
+	if err := env.Err(); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("se esperaba un error que mencionara %s: %v", path, err)
+	}
+}
+
+// Gin lee GIN_MODE al iniciarse el proceso; si solo viene en el .env, hay que aplicarlo después.
+func TestLoadDotEnvAppliesGinMode(t *testing.T) {
+	prev := gin.Mode()
+	t.Cleanup(func() { gin.SetMode(prev) })
+
+	var env Env
+	env.LoadDotEnv(writeDotEnv(t, "GIN_MODE=release\n", gin.EnvGinMode))
+	if err := env.Err(); err != nil || gin.Mode() != gin.ReleaseMode {
+		t.Fatalf("modo de Gin = %q (err = %v), se esperaba release", gin.Mode(), err)
+	}
+
+	env = Env{}
+	env.LoadDotEnv(writeDotEnv(t, "GIN_MODE=produccion\n", gin.EnvGinMode))
+	if err := env.Err(); err == nil || !strings.Contains(err.Error(), gin.EnvGinMode) {
+		t.Fatalf("un GIN_MODE inválido debe ser un error de configuración: %v", err)
 	}
 }
 

@@ -7,9 +7,8 @@ import (
 
 // NaturalCompare define el orden de las diapositivas: lexicográfico, salvo que los tramos de
 // dígitos se comparan por su valor numérico. Con nombres rellenados con ceros (001.png,
-// 002.png...) el resultado es idéntico al orden lexicográfico puro; con nombres sin relleno,
-// como los que exporta PowerPoint (Diapositiva1.PNG ... Diapositiva10.PNG), evita que
-// "Diapositiva10" quede antes que "Diapositiva2". No distingue mayúsculas; a igualdad desempata
+// 002.png...) el resultado es idéntico al orden lexicográfico puro; con nombres sin relleno
+// (page-1.png ... page-10.png) evita que "page-10" quede antes que "page-2". No distingue mayúsculas; a igualdad desempata
 // con el orden lexicográfico estricto para que el resultado sea determinista.
 func NaturalCompare(a, b string) int {
 	if c := naturalCompare(strings.ToLower(a), strings.ToLower(b)); c != 0 {

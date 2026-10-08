@@ -184,10 +184,10 @@ func (h *Handler) fail(c *gin.Context, err error) {
 	case errors.Is(err, presentation.ErrNotFound), errors.Is(err, presentation.ErrSlideNotFound):
 		platform.WriteError(c, http.StatusNotFound, err.Error())
 	case errors.Is(err, presentation.ErrConverterUnavailable):
-		h.log.Error("conversión de PPTX no disponible", "err", err)
+		h.log.Error("conversión no disponible", "err", err)
 		platform.WriteError(c, http.StatusServiceUnavailable, presentation.ErrConverterUnavailable.Error())
 	case errors.Is(err, presentation.ErrConversionFailed):
-		h.log.Warn("conversión de PPTX fallida", "err", err)
+		h.log.Warn("conversión fallida", "err", err)
 		platform.WriteError(c, http.StatusUnprocessableEntity, presentation.ErrConversionFailed.Error())
 	case errors.Is(err, context.Canceled):
 		platform.WriteError(c, http.StatusServiceUnavailable, "petición cancelada")

@@ -1,10 +1,11 @@
 // Package presentation contiene los casos de uso del dominio "presentaciones": crear una
-// presentación a partir de un archivo subido (.zip de imágenes o .pptx), consultar sus
-// metadatos y resolver la imagen de cada diapositiva.
+// presentación a partir de un documento subido (.pptx o .pdf), consultar sus metadatos y
+// resolver la imagen de cada diapositiva.
 package presentation
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,7 @@ import (
 var (
 	ErrNotFound          = errors.New("presentación no encontrada")
 	ErrSlideNotFound     = errors.New("diapositiva no encontrada")
-	ErrUnsupportedFormat = errors.New("formato no soportado: sube un .zip con imágenes o un .pptx")
+	ErrUnsupportedFormat = errors.New("formato no soportado: sube un .pptx o un .pdf")
 
 	// Errores de las capas inferiores, re-exportados para que el handler dependa solo de este paquete.
 	ErrInvalidFile          = storage.ErrInvalidFile
@@ -35,7 +36,8 @@ var (
 	ErrConverterUnavailable = convert.ErrUnavailable
 )
 
-// Converter renderiza un documento de presentación como una imagen por diapositiva.
+// Converter renderiza un documento como una imagen por diapositiva (o página). Deduce el
+// formato de la extensión de src, que Create garantiza que corresponde a su contenido.
 type Converter interface {
 	ToImages(ctx context.Context, src, outDir string, maxPages int) ([]string, error)
 }
@@ -50,7 +52,7 @@ type Presentation struct {
 // Slide describe una diapositiva y la URL pública de su imagen.
 type Slide struct {
 	Number int    `json:"slide"` // empieza en 1
-	File   string `json:"file"`  // nombre en disco: 001.png, 002.jpg...
+	File   string `json:"file"`  // nombre en disco: 001.png, 002.png...
 	URL    string `json:"url"`
 }
 
@@ -71,16 +73,17 @@ func NewService(store *storage.Store, conv Converter, limits storage.Limits, log
 type sourceKind string
 
 const (
-	kindZip  sourceKind = ".zip"
 	kindPPTX sourceKind = ".pptx"
+	kindPDF  sourceKind = ".pdf"
 )
 
-// Create procesa un archivo subido y publica la presentación:
+// Create procesa un documento subido y publica la presentación:
 //
 //  1. genera un UUID y un directorio de trabajo exclusivo (<uploads>/.staging/<uuid>/);
-//  2. guarda el archivo aplicando el límite de tamaño;
-//  3. extrae (ZIP) o renderiza (PPTX, vía LibreOffice) las diapositivas, ordenadas y
-//     renombradas como 001.png, 002.png...;
+//  2. guarda el archivo aplicando el límite de tamaño y comprueba que el contenido
+//     corresponde a la extensión (un PPTX real o un PDF real);
+//  3. renderiza cada diapositiva (PPTX) o página (PDF) con el Converter; las imágenes se
+//     ordenan y se renombran como 001.png, 002.png...;
 //  4. publica con un rename atómico a <uploads>/<uuid>/: nadie ve una presentación a medias.
 //
 // Pase lo que pase, el directorio de trabajo se elimina al terminar.
@@ -101,19 +104,18 @@ func (s *Service) Create(ctx context.Context, filename string, src io.Reader) (P
 	if _, err := storage.WriteFile(srcPath, src, s.limits.MaxUploadBytes); err != nil {
 		return Presentation{}, err
 	}
-
-	slidesDir := filepath.Join(work, "slides")
-	if err := os.Mkdir(slidesDir, 0o750); err != nil {
+	switch kind {
+	case kindPPTX:
+		err = checkPPTX(srcPath, s.limits)
+	case kindPDF:
+		err = checkPDF(srcPath)
+	}
+	if err != nil {
 		return Presentation{}, err
 	}
 
-	var names []string
-	switch kind {
-	case kindZip:
-		names, err = storage.ExtractImages(ctx, srcPath, slidesDir, s.limits)
-	case kindPPTX:
-		names, err = s.renderPPTX(ctx, srcPath, work, slidesDir)
-	}
+	slidesDir := filepath.Join(work, "slides")
+	names, err := s.render(ctx, srcPath, work, slidesDir)
 	if err != nil {
 		return Presentation{}, err
 	}
@@ -163,13 +165,14 @@ func (s *Service) listSlides(id string) ([]string, error) {
 	return names, err
 }
 
-func (s *Service) renderPPTX(ctx context.Context, srcPath, work, slidesDir string) ([]string, error) {
-	if err := checkPPTX(srcPath, s.limits); err != nil {
-		return nil, err
-	}
+// render convierte el documento en imágenes dentro de <work>/render y las incorpora, ya
+// ordenadas y renombradas, a slidesDir.
+func (s *Service) render(ctx context.Context, srcPath, work, slidesDir string) ([]string, error) {
 	renderDir := filepath.Join(work, "render")
-	if err := os.Mkdir(renderDir, 0o750); err != nil {
-		return nil, err
+	for _, dir := range []string{renderDir, slidesDir} {
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			return nil, err
+		}
 	}
 	pages, err := s.conv.ToImages(ctx, srcPath, renderDir, s.limits.MaxSlides)
 	if err != nil {
@@ -210,12 +213,31 @@ func checkPPTX(path string, lim storage.Limits) error {
 	return nil
 }
 
+// pdfMagic es la firma con la que empieza todo PDF.
+var pdfMagic = []byte("%PDF-")
+
+// checkPDF comprueba, ANTES de invocar a pdftoppm, que el archivo empieza por la firma de un
+// PDF. Falla rápido con un error claro y evita entregar archivos arbitrarios al conversor.
+func checkPDF(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	head := make([]byte, len(pdfMagic))
+	if _, err := io.ReadFull(f, head); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if !bytes.Equal(head, pdfMagic) {
+		return fmt.Errorf("%w: no es un PDF válido (no empieza por %%PDF-)", ErrInvalidFile)
+	}
+	return nil
+}
+
 func detectKind(filename string) (sourceKind, error) {
-	switch sourceKind(strings.ToLower(filepath.Ext(filename))) {
-	case kindZip:
-		return kindZip, nil
-	case kindPPTX:
-		return kindPPTX, nil
+	switch kind := sourceKind(strings.ToLower(filepath.Ext(filename))); kind {
+	case kindPPTX, kindPDF:
+		return kind, nil
 	default:
 		return "", ErrUnsupportedFormat
 	}

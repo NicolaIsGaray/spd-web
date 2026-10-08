@@ -24,11 +24,11 @@ build:
 	@for s in $(SERVICES); do $(GO) build -o bin/$$s ./services/$$s || exit 1; done
 	@echo "binarios en bin/: $(SERVICES)"
 
-## test: todos los tests (incluye integración con LibreOffice si está instalado)
+## test: todos los tests (incluye integración con LibreOffice y pdftoppm si están instalados)
 test:
 	$(GO) test ./...
 
-## test-short: tests unitarios, sin LibreOffice
+## test-short: tests unitarios, sin LibreOffice ni pdftoppm
 test-short:
 	$(GO) test -short ./...
 
