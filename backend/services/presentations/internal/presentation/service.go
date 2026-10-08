@@ -249,7 +249,7 @@ func newPresentation(id string, names []string) Presentation {
 		slides[i] = Slide{
 			Number: i + 1,
 			File:   name,
-			URL:    "/api/presentaciones/" + id + "/slides/" + strconv.Itoa(i+1),
+			URL:    "/api/presentations/" + id + "/slides/" + strconv.Itoa(i+1),
 		}
 	}
 	return Presentation{ID: id, SlideCount: len(names), Slides: slides}

@@ -103,7 +103,7 @@ func upload(t *testing.T, srv *httptest.Server, field, filename string, data []b
 	_, _ = fw.Write(data)
 	_ = mw.Close()
 
-	resp, err := http.Post(srv.URL+"/api/presentaciones/upload", mw.FormDataContentType(), &body)
+	resp, err := http.Post(srv.URL+"/api/presentations/upload", mw.FormDataContentType(), &body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,17 +145,17 @@ func TestUploadAndServeSlides(t *testing.T) {
 			if id == "" || body["slide_count"].(float64) != 2 {
 				t.Fatalf("respuesta = %v", body)
 			}
-			if loc := resp.Header.Get("Location"); loc != "/api/presentaciones/"+id {
+			if loc := resp.Header.Get("Location"); loc != "/api/presentations/"+id {
 				t.Fatalf("Location = %q", loc)
 			}
 
-			meta, data := get(t, srv.URL+"/api/presentaciones/"+id)
+			meta, data := get(t, srv.URL+"/api/presentations/"+id)
 			if meta.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"file":"002.png"`)) {
 				t.Fatalf("metadatos: %d %s", meta.StatusCode, data)
 			}
 
 			for _, ref := range []string{"1", "001.png"} {
-				img, data := get(t, srv.URL+"/api/presentaciones/"+id+"/slides/"+ref)
+				img, data := get(t, srv.URL+"/api/presentations/"+id+"/slides/"+ref)
 				if img.StatusCode != http.StatusOK || !bytes.Equal(data, slide1) {
 					t.Fatalf("slide %s: %d (%d bytes)", ref, img.StatusCode, len(data))
 				}
@@ -199,11 +199,11 @@ func TestErrorResponses(t *testing.T) {
 	}
 
 	gets := map[string]int{
-		"/api/presentaciones/no-es-uuid":                               http.StatusBadRequest,
-		"/api/presentaciones/6f1c1a52-2a0e-4b6b-9a59-6a1d8f3f1c11":     http.StatusNotFound,
-		"/api/presentaciones/" + id + "/slides/2":                      http.StatusNotFound,
-		"/api/presentaciones/" + id + "/slides/..%2f..%2fetc%2fpasswd": http.StatusNotFound,
-		"/api/presentaciones/" + id + "/slides/.staging":               http.StatusNotFound,
+		"/api/presentations/no-es-uuid":                               http.StatusBadRequest,
+		"/api/presentations/6f1c1a52-2a0e-4b6b-9a59-6a1d8f3f1c11":     http.StatusNotFound,
+		"/api/presentations/" + id + "/slides/2":                      http.StatusNotFound,
+		"/api/presentations/" + id + "/slides/..%2f..%2fetc%2fpasswd": http.StatusNotFound,
+		"/api/presentations/" + id + "/slides/.staging":               http.StatusNotFound,
 	}
 	for path, want := range gets {
 		if resp, data := get(t, srv.URL+path); resp.StatusCode != want {
@@ -211,7 +211,7 @@ func TestErrorResponses(t *testing.T) {
 		}
 	}
 
-	resp, err := http.Post(srv.URL+"/api/presentaciones/upload", "application/json", bytes.NewBufferString(`{}`))
+	resp, err := http.Post(srv.URL+"/api/presentations/upload", "application/json", bytes.NewBufferString(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestTruncatedUploadIsAClientError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "POST /api/presentaciones/upload HTTP/1.1\r\nHost: test\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n",
+	fmt.Fprintf(conn, "POST /api/presentations/upload HTTP/1.1\r\nHost: test\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n",
 		mw.FormDataContentType(), body.Len())
 	_, _ = conn.Write(truncated)
 	_ = conn.(*net.TCPConn).CloseWrite()

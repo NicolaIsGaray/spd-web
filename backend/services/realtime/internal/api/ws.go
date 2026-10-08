@@ -24,7 +24,7 @@ const (
 	StatusPresentationNotFound websocket.StatusCode = 4404
 )
 
-// serveWS atiende GET /ws/presentacion/:id.
+// serveWS atiende GET /ws/presentation/:id.
 func (h *Handler) serveWS(c *gin.Context) {
 	id, ok := platform.CanonicalUUID(c.Param("id"))
 	if !ok {

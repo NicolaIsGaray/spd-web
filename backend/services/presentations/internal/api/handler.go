@@ -39,12 +39,12 @@ func New(svc *presentation.Service, maxUploadBytes int64, log *slog.Logger) *Han
 
 // Register registra las rutas del servicio.
 func (h *Handler) Register(r gin.IRouter) {
-	r.POST("/api/presentaciones/upload", h.upload)
-	r.GET("/api/presentaciones/:id", h.get)
-	r.GET("/api/presentaciones/:id/slides/:slide_id", h.slide)
+	r.POST("/api/presentations/upload", h.upload)
+	r.GET("/api/presentations/:id", h.get)
+	r.GET("/api/presentations/:id/slides/:slide_id", h.slide)
 }
 
-// upload atiende POST /api/presentaciones/upload (multipart/form-data, campo "file").
+// upload atiende POST /api/presentations/upload (multipart/form-data, campo "file").
 func (h *Handler) upload(c *gin.Context) {
 	// Tope duro para TODO el cuerpo. El límite exacto del archivo lo aplica el servicio al
 	// guardarlo en disco.
@@ -66,7 +66,7 @@ func (h *Handler) upload(c *gin.Context) {
 		h.fail(c, err)
 		return
 	}
-	c.Header("Location", "/api/presentaciones/"+p.ID)
+	c.Header("Location", "/api/presentations/"+p.ID)
 	c.JSON(http.StatusCreated, p)
 }
 
@@ -118,7 +118,7 @@ func uploadError(err error) error {
 	return fmt.Errorf("%w: no se pudo leer el cuerpo multipart (%v)", errBadRequest, err)
 }
 
-// get atiende GET /api/presentaciones/:id: metadatos y lista de diapositivas (la "carpeta").
+// get atiende GET /api/presentations/:id: metadatos y lista de diapositivas (la "carpeta").
 func (h *Handler) get(c *gin.Context) {
 	id, ok := platform.CanonicalUUID(c.Param("id"))
 	if !ok {
@@ -133,7 +133,7 @@ func (h *Handler) get(c *gin.Context) {
 	c.JSON(http.StatusOK, p)
 }
 
-// slide atiende GET /api/presentaciones/:id/slides/:slide_id. slide_id es el número de
+// slide atiende GET /api/presentations/:id/slides/:slide_id. slide_id es el número de
 // diapositiva (1, 2, 3...) o el nombre del archivo (001.png).
 func (h *Handler) slide(c *gin.Context) {
 	id, ok := platform.CanonicalUUID(c.Param("id"))

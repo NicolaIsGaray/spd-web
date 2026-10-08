@@ -82,10 +82,10 @@ func TestRoutesReachTheOwningService(t *testing.T) {
 	gwHost := strings.TrimPrefix(gw.URL, "http://")
 
 	routes := []struct{ method, path, service string }{
-		{http.MethodPost, "/api/presentaciones/upload", "presentations"},
-		{http.MethodGet, "/api/presentaciones/" + pid, "presentations"},
-		{http.MethodGet, "/api/presentaciones/" + pid + "/slides/3", "presentations"},
-		{http.MethodPost, "/api/presentaciones/" + pid + "/control", "realtime"},
+		{http.MethodPost, "/api/presentations/upload", "presentations"},
+		{http.MethodGet, "/api/presentations/" + pid, "presentations"},
+		{http.MethodGet, "/api/presentations/" + pid + "/slides/3", "presentations"},
+		{http.MethodPost, "/api/presentations/" + pid + "/control", "realtime"},
 	}
 	for _, rt := range routes {
 		resp, body := call(t, rt.method, gw.URL+rt.path, nil)
@@ -113,7 +113,7 @@ func TestWebSocketThroughGateway(t *testing.T) {
 	// Mismo origen que el gateway: el servicio de destino debe aceptarlo porque el gateway
 	// conserva el Host público.
 	header := http.Header{"Origin": {gw.URL}}
-	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(gw.URL, "http")+"/ws/presentacion/"+pid, &websocket.DialOptions{HTTPHeader: header})
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(gw.URL, "http")+"/ws/presentation/"+pid, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		t.Fatalf("dial a través del gateway: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestWebSocketThroughGateway(t *testing.T) {
 
 func TestCORS(t *testing.T) {
 	gw := newGateway(t, fakeUpstream(t, "presentations").URL, fakeUpstream(t, "realtime").URL)
-	control := gw.URL + "/api/presentaciones/" + pid + "/control"
+	control := gw.URL + "/api/presentations/" + pid + "/control"
 
 	preflight := http.Header{"Origin": {"http://localhost:5173"}, "Access-Control-Request-Method": {"POST"}, "Access-Control-Request-Headers": {"content-type"}}
 	resp, _ := call(t, http.MethodOptions, control, preflight)
@@ -152,7 +152,7 @@ func TestUnavailableUpstream(t *testing.T) {
 	down.Close() // puerto sin servicio
 
 	gw := newGateway(t, downURL, downURL)
-	resp, body := call(t, http.MethodGet, gw.URL+"/api/presentaciones/"+pid, nil)
+	resp, body := call(t, http.MethodGet, gw.URL+"/api/presentations/"+pid, nil)
 	if resp.StatusCode != http.StatusBadGateway || body["error"] == "" {
 		t.Fatalf("servicio caído: %d %v; se esperaba 502 con mensaje", resp.StatusCode, body)
 	}

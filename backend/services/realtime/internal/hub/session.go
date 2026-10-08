@@ -34,7 +34,7 @@ type SlideState struct {
 
 // SlideURL devuelve la ruta pública (a través del gateway) de la imagen de una diapositiva.
 func SlideURL(presentationID string, slide int) string {
-	return "/api/presentaciones/" + presentationID + "/slides/" + strconv.Itoa(slide)
+	return "/api/presentations/" + presentationID + "/slides/" + strconv.Itoa(slide)
 }
 
 // session es el estado de UNA presentación en vivo. Solo la goroutine Run del Hub lo toca.

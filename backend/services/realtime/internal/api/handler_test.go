@@ -60,7 +60,7 @@ func (e *testEnv) dial(t *testing.T, id string, header http.Header) (*websocket.
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	url := "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/ws/presentacion/" + id
+	url := "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/ws/presentation/" + id
 	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
 	if conn != nil {
 		t.Cleanup(func() { _ = conn.CloseNow() })
@@ -79,7 +79,7 @@ func (e *testEnv) viewer(t *testing.T) *websocket.Conn {
 
 func (e *testEnv) control(t *testing.T, id, body string) (int, map[string]any) {
 	t.Helper()
-	resp, err := http.Post(e.srv.URL+"/api/presentaciones/"+id+"/control", "application/json", strings.NewReader(body))
+	resp, err := http.Post(e.srv.URL+"/api/presentations/"+id+"/control", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST control: %v", err)
 	}

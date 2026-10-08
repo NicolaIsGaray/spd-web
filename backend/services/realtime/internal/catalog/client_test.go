@@ -31,7 +31,7 @@ func TestSlideCount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/presentaciones/"+pid {
+				if r.URL.Path != "/api/presentations/"+pid {
 					t.Errorf("ruta consultada = %s", r.URL.Path)
 				}
 				w.WriteHeader(tc.status)

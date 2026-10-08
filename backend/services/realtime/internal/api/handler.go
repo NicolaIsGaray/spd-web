@@ -46,8 +46,8 @@ func New(h *hub.Hub, allowedOrigins []string, log *slog.Logger) *Handler {
 
 // Register registra las rutas del servicio.
 func (h *Handler) Register(r gin.IRouter) {
-	r.GET("/ws/presentacion/:id", h.serveWS)
-	r.POST("/api/presentaciones/:id/control", h.control)
+	r.GET("/ws/presentation/:id", h.serveWS)
+	r.POST("/api/presentations/:id/control", h.control)
 }
 
 // Shutdown termina las conexiones WebSocket al apagar el servicio. El cierre ordenado (1001)
@@ -77,7 +77,7 @@ func (h *Handler) waitConns(timeout time.Duration) bool {
 	}
 }
 
-// controlRequest es el cuerpo de POST /api/presentaciones/:id/control. Formatos aceptados:
+// controlRequest es el cuerpo de POST /api/presentations/:id/control. Formatos aceptados:
 //
 //	{"action": "next"}   {"action": "prev"}
 //	{"slide": 3}   {"slide_index": 3}   {"action": "goto", "slide": 3}
@@ -117,7 +117,7 @@ func (r controlRequest) command() (hub.Command, error) {
 	}
 }
 
-// control atiende POST /api/presentaciones/:id/control: actualiza el estado en memoria y el
+// control atiende POST /api/presentations/:id/control: actualiza el estado en memoria y el
 // Hub difunde la nueva diapositiva a todos los visores de la sesión.
 func (h *Handler) control(c *gin.Context) {
 	id, ok := platform.CanonicalUUID(c.Param("id"))

@@ -10,9 +10,9 @@ Tres microservicios, cada uno dueño de un dominio y desplegable por separado:
  Frontend (React) ──►  gateway :8080      API pública única + CORS
                           │
         ┌─────────────────┴──────────────────┐
-        │ /api/presentaciones/upload         │ /api/presentaciones/:id/control
-        │ /api/presentaciones/:id            │ /ws/presentacion/:id
-        │ /api/presentaciones/:id/slides/:n  │
+        │ /api/presentations/upload          │ /api/presentations/:id/control
+        │ /api/presentations/:id             │ /ws/presentation/:id
+        │ /api/presentations/:id/slides/:n   │
         ▼                                    ▼
   presentations :8081   ◄── HTTP ───   realtime :8082
   subida y conversión    (slide_count)  Hub: sesiones en memoria,
@@ -76,14 +76,14 @@ origen de Vite (`http://localhost:5173`) para CORS y WebSocket.
 
 Todas las rutas pasan por el gateway. Los errores siempre tienen la forma `{"error": "..."}`.
 
-### `POST /api/presentaciones/upload`
+### `POST /api/presentations/upload`
 
 Cuerpo `multipart/form-data` con el campo `file`: un `.pptx` o un `.pdf`. El formato se
 deduce de la extensión, y el contenido tiene que corresponder a ella.
 
 ```sh
-curl -F file=@presentacion.pptx http://localhost:8080/api/presentaciones/upload
-curl -F file=@informe.pdf http://localhost:8080/api/presentaciones/upload
+curl -F file=@presentacion.pptx http://localhost:8080/api/presentations/upload
+curl -F file=@informe.pdf http://localhost:8080/api/presentations/upload
 ```
 
 ```json
@@ -91,7 +91,7 @@ curl -F file=@informe.pdf http://localhost:8080/api/presentaciones/upload
   "presentation_id": "0b8e4c3e-7f4a-4f0e-8d55-2f8f0f6a9b22",
   "slide_count": 12,
   "slides": [
-    {"slide": 1, "file": "001.png", "url": "/api/presentaciones/0b8e…/slides/1"}
+    {"slide": 1, "file": "001.png", "url": "/api/presentations/0b8e…/slides/1"}
   ]
 }
 ```
@@ -110,24 +110,24 @@ Cada diapositiva del PPTX, o cada página del PDF, se renderiza como PNG con el 
 PPTX pasa por LibreOffice (PPTX → PDF) y después por pdftoppm (PDF → PNG); un PDF va directo
 a pdftoppm.
 
-### `GET /api/presentaciones/:id`
+### `GET /api/presentations/:id`
 
 Metadatos y lista de diapositivas de una presentación, con el mismo formato que la respuesta
 de subida. Sirve para precargar todas las imágenes.
 
-### `GET /api/presentaciones/:id/slides/:slide_id`
+### `GET /api/presentations/:id/slides/:slide_id`
 
 Devuelve la imagen. `slide_id` es el número de diapositiva, empezando en 1, o el nombre del
 archivo (`003.png`). Las presentaciones son inmutables, así que la respuesta se puede cachear
 indefinidamente (`Cache-Control: immutable`).
 
-### `POST /api/presentaciones/:id/control`
+### `POST /api/presentations/:id/control`
 
 Cambia la diapositiva actual y la difunde a todos los visores de esa presentación.
 
 ```sh
 curl -X POST -H 'Content-Type: application/json' -d '{"action":"next"}' \
-  http://localhost:8080/api/presentaciones/<id>/control
+  http://localhost:8080/api/presentations/<id>/control
 ```
 
 | Cuerpo                                | Efecto                                    |
@@ -141,14 +141,14 @@ Responde 200 con el estado resultante, con el mismo formato que el mensaje del W
 Responde 400 si el comando es inválido o la diapositiva está fuera de rango, y 404 si la
 presentación no existe.
 
-### `GET /ws/presentacion/:id` (WebSocket)
+### `GET /ws/presentation/:id` (WebSocket)
 
 Al conectarse, el visor recibe de inmediato la diapositiva actual. Después recibe un mensaje
 por cada cambio:
 
 ```json
 {"type": "slide", "presentation_id": "0b8e…", "slide": 3, "slide_count": 12,
- "url": "/api/presentaciones/0b8e…/slides/3"}
+ "url": "/api/presentations/0b8e…/slides/3"}
 ```
 
 Cada mensaje es el estado completo. Un visor lento puede saltarse estados intermedios, pero

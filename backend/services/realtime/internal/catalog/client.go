@@ -28,9 +28,9 @@ func New(base *url.URL, timeout time.Duration) *Client {
 	return &Client{base: base, http: &http.Client{Timeout: timeout}}
 }
 
-// SlideCount devuelve el número de diapositivas consultando GET /api/presentaciones/{id}.
+// SlideCount devuelve el número de diapositivas consultando GET /api/presentations/{id}.
 func (c *Client) SlideCount(ctx context.Context, presentationID string) (int, error) {
-	u := c.base.JoinPath("api", "presentaciones", presentationID)
+	u := c.base.JoinPath("api", "presentations", presentationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return 0, err

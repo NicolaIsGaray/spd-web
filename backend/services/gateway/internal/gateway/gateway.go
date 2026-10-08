@@ -28,13 +28,13 @@ func Register(r gin.IRouter, up Upstreams, log *slog.Logger) {
 	realtime := gin.WrapH(newProxy(up.Realtime, "realtime", transport, log))
 
 	// Dominio "presentaciones": subida, metadatos e imágenes.
-	r.POST("/api/presentaciones/upload", presentations)
-	r.GET("/api/presentaciones/:id", presentations)
-	r.GET("/api/presentaciones/:id/slides/:slide_id", presentations)
+	r.POST("/api/presentations/upload", presentations)
+	r.GET("/api/presentations/:id", presentations)
+	r.GET("/api/presentations/:id/slides/:slide_id", presentations)
 
 	// Dominio "tiempo real": control del presentador y WebSocket de los visores.
-	r.POST("/api/presentaciones/:id/control", realtime)
-	r.GET("/ws/presentacion/:id", realtime)
+	r.POST("/api/presentations/:id/control", realtime)
+	r.GET("/ws/presentation/:id", realtime)
 }
 
 // newProxy crea un proxy inverso hacia target. httputil.ReverseProxy soporta de forma nativa

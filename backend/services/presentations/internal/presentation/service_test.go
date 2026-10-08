@@ -132,7 +132,7 @@ func TestCreateFromPDF(t *testing.T) {
 	if conv.gotExt != ".pdf" || !bytes.Equal(conv.gotDoc, minimalPDF) {
 		t.Fatalf("el conversor recibió %q (%q), se esperaba el PDF subido", conv.gotExt, conv.gotDoc)
 	}
-	if p.SlideCount != 12 || p.Slides[11].File != "012.png" || p.Slides[11].URL != "/api/presentaciones/"+p.ID+"/slides/12" {
+	if p.SlideCount != 12 || p.Slides[11].File != "012.png" || p.Slides[11].URL != "/api/presentations/"+p.ID+"/slides/12" {
 		t.Fatalf("presentación = %+v", p)
 	}
 	f.assertNoLeftovers(t, 1)

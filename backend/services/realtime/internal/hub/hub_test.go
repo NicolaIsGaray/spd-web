@@ -122,7 +122,7 @@ func TestRegisterReceivesCurrentSlide(t *testing.T) {
 	control(t, h, pid, Command{Action: ActionGoto, Slide: 3})
 	c := register(t, h, pid)
 
-	want := SlideState{Type: "slide", PresentationID: pid, Slide: 3, SlideCount: 5, URL: "/api/presentaciones/" + pid + "/slides/3"}
+	want := SlideState{Type: "slide", PresentationID: pid, Slide: 3, SlideCount: 5, URL: "/api/presentations/" + pid + "/slides/3"}
 	if got := recv(t, c); got != want {
 		t.Fatalf("estado inicial = %+v, se esperaba %+v", got, want)
 	}
