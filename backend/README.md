@@ -1,25 +1,29 @@
 # spd-web · backend
 
-Sincronización de presentaciones en tiempo real. Un presentador sube un `.pptx` o un `.pdf`, que el servidor convierte en una imagen por diapositiva; después controla qué diapositiva se muestra y todos los visores conectados por WebSocket la ven cambiar al instante.
+Sincronización de presentaciones en tiempo real. Un presentador sube un `.pptx` o un `.pdf`, que el servidor convierte en una imagen por diapositiva; después controla qué diapositiva se muestra y todos los visores conectados por WebSocket la ven cambiar al instante. Los usuarios, las salas, sus grupos (con sus integrantes) y las presentaciones asignadas a cada grupo se guardan en PostgreSQL.
 
 ## Arquitectura
 
-Tres microservicios, cada uno dueño de un dominio y desplegable por separado:
+Cuatro microservicios, cada uno dueño de un dominio y desplegable por separado:
 
 ```
  Frontend (React) ──►  gateway :8080      API pública única + CORS
-                          │
-        ┌─────────────────┴──────────────────┐
-        │ /api/presentations/upload          │ /api/presentations/:id/control
-        │ /api/presentations/:id             │ /ws/presentation/:id
-        │ /api/presentations/:id/slides/:n   │
-        ▼                                    ▼
-  presentations :8081   ◄── HTTP ───   realtime :8082
-  subida y conversión    (slide_count)  Hub: sesiones en memoria,
-  PPTX/PDF → PNG                        WebSockets y control
-        │
-        ▼
-  UPLOAD_DIR/<uuid>/001.png, 002.png…
+                              │
+        ┌─────────────────────┼───────────────────────┐
+        ▼                     ▼                       ▼
+  presentations :8081   realtime :8082          rooms :8083
+  /api/presentations    /api/presentations/     /api/users
+    /upload, /:id,        :id/control           /api/rooms
+    /:id/slides/:n      /ws/presentation/:id    /api/groups
+
+  subida y conversión   sesiones en memoria,    usuarios, salas, miembros,
+  PPTX/PDF → PNG        WebSockets y control    grupos y presentaciones
+        │                                             │
+        ▼                                             ▼
+  UPLOAD_DIR/<uuid>/                            PostgreSQL (GORM)
+  001.png, 002.png…
+
+  realtime y rooms ──HTTP──► presentations: GET /api/presentations/:id (slide_count)
 ```
 
 | Servicio        | Dominio                                                           | Puerto |
@@ -27,9 +31,10 @@ Tres microservicios, cada uno dueño de un dominio y desplegable por separado:
 | `gateway`       | Punto de entrada: enruta cada endpoint al servicio dueño          | 8080   |
 | `presentations` | Archivos: subida, conversión de PPTX y PDF a PNG, imágenes        | 8081   |
 | `realtime`      | Sesiones en vivo: diapositiva actual, visores WebSocket, control  | 8082   |
+| `rooms`         | Usuarios, salas, miembros, grupos y presentaciones (PostgreSQL)   | 8083   |
 
-Los servicios no comparten disco ni memoria: `realtime` solo conoce las presentaciones
-consultando la API de `presentations`.
+Los servicios no comparten disco, memoria ni base de datos: `realtime` y `rooms` solo conocen
+las presentaciones consultando la API de `presentations`, y solo `rooms` usa PostgreSQL.
 
 ```
 backend/
@@ -41,10 +46,16 @@ backend/
     │   ├── presentation/       casos de uso (crear, consultar, resolver diapositiva)
     │   ├── storage/            servicio de archivos: guardado con límite, orden, publicación atómica
     │   └── convert/            PPTX → PDF (LibreOffice) → PNG (pdftoppm); un PDF va directo a pdftoppm
-    └── realtime/               main.go + internal/
-        ├── hub/                patrón Hub: estado y difusión, sin locks
-        ├── api/                endpoint de control + bucles de lectura/escritura del WebSocket
-        └── catalog/            cliente HTTP del servicio presentations
+    ├── realtime/               main.go + internal/
+    │   ├── hub/                patrón Hub: estado y difusión, sin locks
+    │   ├── api/                endpoint de control + bucles de lectura/escritura del WebSocket
+    │   └── catalog/            cliente HTTP del servicio presentations
+    └── rooms/                  main.go + internal/
+        ├── api/                handlers REST
+        ├── domain/             entidades, reglas y casos de uso; no conoce GORM
+        ├── store/              persistencia con GORM: modelos, migración, transacciones, borrado lógico
+        ├── catalog/            cliente HTTP del servicio presentations
+        └── dbtest/             esquema PostgreSQL aislado para los tests de integración
 ```
 
 Cada servicio guarda su código en su propio `internal/`. El compilador de Go impide que un
@@ -59,14 +70,25 @@ Requisitos:
 - poppler (`pdftoppm`) para convertir cualquier subida y, además, LibreOffice (`soffice`) para
   los `.pptx`. Si falta alguno, las subidas que lo necesitan responden 503: sin LibreOffice,
   los `.pdf` funcionan igual.
+- PostgreSQL para `rooms`. Basta un usuario y una base (p. ej. `createuser -P spd` y
+  `createdb -O spd spd`) y apuntar `DATABASE_URL` a ella. Al arrancar, `rooms` crea o actualiza
+  las tablas.
 
 ```sh
 cp .env.example .env  # configuración local (ver Configuración)
-make run              # los tres servicios en paralelo; Ctrl+C los detiene
-make run-gateway      # o cada uno por separado: run-presentations, run-realtime
+make run              # los cuatro servicios en paralelo; Ctrl+C los detiene
+make run-gateway      # o cada uno por separado: run-presentations, run-realtime, run-rooms
 make build            # binarios en bin/
-make test             # todos los tests (los de LibreOffice y pdftoppm se omiten si no están instalados)
+make test             # todos los tests (se omiten los que necesitan algo que no está disponible)
 make test-race        # con el detector de carreras
+```
+
+Los tests de integración de `rooms` necesitan PostgreSQL y solo se ejecutan si se define
+`TEST_DATABASE_URL`. Cada test crea su propio esquema y lo borra al terminar, así que puede
+usarse la misma base de desarrollo:
+
+```sh
+TEST_DATABASE_URL='postgres://spd:spd@localhost:5432/spd?sslmode=disable' make test
 ```
 
 El frontend solo habla con el gateway (`http://localhost:8080`). Por defecto se admite el
@@ -164,6 +186,66 @@ Códigos de cierre que el frontend puede leer en `event.code`:
 | 1013   | El servicio presentations no responde         | Sí, con espera         |
 | 1006   | Corte de red                                  | Sí, con espera         |
 
+### Usuarios, salas, grupos y presentaciones asignadas (servicio `rooms`)
+
+CRUD en JSON sobre PostgreSQL. Los `DELETE` son borrados lógicos (ver Decisiones de diseño):
+lo borrado deja de verse en la API, pero sigue en la base de datos.
+
+| Ruta                                             | Métodos                  | Recurso                                                         |
+|--------------------------------------------------|--------------------------|-----------------------------------------------------------------|
+| `/api/users`                                     | `GET`, `POST`            | Usuarios                                                        |
+| `/api/users/:id`                                 | `GET`, `PATCH`, `DELETE` | Un usuario (borrarlo lo saca de sus salas y grupos)             |
+| `/api/users/:id/rooms`                           | `GET`                    | Salas de las que es miembro                                     |
+| `/api/users/:id/groups`                          | `GET`                    | Grupos de los que es integrante                                 |
+| `/api/rooms`                                     | `GET`, `POST`            | Salas                                                           |
+| `/api/rooms/:id`                                 | `GET`, `PATCH`, `DELETE` | Una sala (borrarla borra sus grupos, presentaciones y miembros) |
+| `/api/rooms/:id/members`                         | `GET`, `POST`            | Miembros (`GET` devuelve usuarios; `POST` une a uno)            |
+| `/api/rooms/:id/members/:user_id`                | `DELETE`                 | Saca a un usuario de la sala y de sus grupos                    |
+| `/api/rooms/:id/groups`                          | `GET`, `POST`            | Grupos de la sala, en orden de paso para presentar              |
+| `/api/groups/:id`                                | `GET`, `PATCH`, `DELETE` | Un grupo (borrarlo borra sus presentaciones e integrantes)      |
+| `/api/groups/:id/members`                        | `GET`, `POST`            | Integrantes (`GET` devuelve usuarios; `POST` une a uno)         |
+| `/api/groups/:id/members/:user_id`               | `DELETE`                 | Saca a un usuario del grupo                                     |
+| `/api/groups/:id/presentations`                  | `GET`, `POST`            | Presentaciones asignadas al grupo                               |
+| `/api/groups/:id/presentations/:presentation_id` | `GET`, `PATCH`, `DELETE` | Una presentación asignada                                       |
+
+`POST` responde 201 con el recurso y la cabecera `Location`; `GET` y `PATCH`, 200 con el
+recurso; `DELETE`, 204 sin cuerpo. `PATCH` cambia solo los campos enviados.
+
+```sh
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"full_name":"Ana López","email":"ana@example.com","password":"secreta123","roles":["presentador"]}' \
+  http://localhost:8080/api/users
+```
+
+```json
+{"id": 1, "full_name": "Ana López", "email": "ana@example.com", "roles": ["presentador"],
+ "created_at": "2026-10-09T12:00:00Z", "updated_at": "2026-10-09T12:00:00Z"}
+```
+
+| Recurso                    | Campos que se envían                                          | Reglas                                                     |
+|----------------------------|---------------------------------------------------------------|------------------------------------------------------------|
+| Usuario                    | `full_name`, `email`, `password`, `roles` (opcional)          | Correo único sin distinguir mayúsculas; contraseña de al menos 8 caracteres (máximo 72 bytes), nunca se devuelve |
+| Sala                       | `name`, `url` (opcional), `access_key` (opcional)             | `url` absoluta http(s); la clave (al menos 4 caracteres, máximo 72 bytes) nunca se devuelve: la respuesta trae `has_access_key`. `PATCH` con `"access_key": ""` la quita |
+| Miembro (`POST …/members`) | `user_id`, `access_key` (si la sala tiene clave)              | 201 al entrar o volver; 200 si ya era miembro; 403 con la clave incorrecta. Responde `{"user_id", "room_id", "joined_at"}` |
+| Grupo                      | `limit`, `priority`                                           | Ambos obligatorios en el alta, de 1 en adelante. `limit` es el cupo del grupo (máximo de integrantes): un `PATCH` no puede dejarlo por debajo de los integrantes actuales. `priority` es su prioridad de paso a la hora de presentar: los grupos de una sala se listan en ese orden (1 primero; a igual prioridad, el creado antes) |
+| Integrante (`POST …/groups/:id/members`) | `user_id`                                       | Tiene que ser miembro de la sala del grupo (409 si no). 201 al entrar o volver; 200 si ya era integrante; 409 si el grupo está completo. Un usuario puede estar en varios grupos, también de la misma sala. Responde `{"user_id", "group_id", "joined_at"}` |
+| Presentación               | `presentation_id`, `slides` (opcional)                        | `presentation_id` es el UUID del servicio presentations y debe existir allí. `slides` son números de diapositiva sin repetir, de 1 a `slide_count`; si falta, se asignan todas. Una presentación está en un solo grupo a la vez |
+
+```json
+{"presentation_id": "0b8e4c3e-7f4a-4f0e-8d55-2f8f0f6a9b22", "group_id": 3, "slides": [1, 2, 5],
+ "created_at": "2026-10-09T12:00:00Z", "updated_at": "2026-10-09T12:00:00Z"}
+```
+
+| Estado | Motivo                                                                                                                                      |
+|--------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| 400    | id o JSON inválido, campo desconocido o dato que no cumple las reglas (el mensaje dice cuál)                                                |
+| 403    | Clave de ingreso incorrecta                                                                                                                 |
+| 404    | El recurso no existe o está borrado                                                                                                         |
+| 409    | Correo ya usado, presentación ya asignada, grupo completo, cupo menor que los integrantes, o usuario que no es miembro de la sala del grupo |
+| 413    | Cuerpo de más de 1 MB                                                                                                                       |
+| 422    | La presentación no existe en el servicio presentations                                                                                      |
+| 503    | El servicio presentations no responde                                                                                                       |
+
 ## Configuración
 
 Por variables de entorno o en un archivo `.env`. Todas tienen un valor por defecto pensado
@@ -172,7 +254,8 @@ para desarrollo local.
 Al arrancar, cada servicio carga con [godotenv](https://github.com/joho/godotenv) el `.env`
 de su directorio de trabajo (`backend/` si se lanza con `make`). `.env.example` es la
 plantilla con lo que se suele ajustar: las URL de los servicios a los que enruta el gateway,
-la carpeta de subidas (`UPLOAD_DIR`) y el tamaño máximo de archivo en MB (`MAX_UPLOAD_MB`).
+la carpeta de subidas (`UPLOAD_DIR`), el tamaño máximo de archivo en MB (`MAX_UPLOAD_MB`) y la
+base de datos de `rooms` (`DATABASE_URL`).
 
 - Las variables definidas en el entorno tienen prioridad sobre el archivo: un despliegue
   puede cambiar cualquier valor sin tocarlo.
@@ -183,12 +266,13 @@ la carpeta de subidas (`UPLOAD_DIR`) y el tamaño máximo de archivo en MB (`MAX
 
 | Variable                     | Servicio             | Defecto                  |
 |------------------------------|----------------------|--------------------------|
-| `HTTP_ADDR`                  | todos                | `:8080` / `:8081` / `:8082` |
+| `HTTP_ADDR`                  | todos                | `:8080` / `:8081` / `:8082` / `:8083` |
 | `LOG_LEVEL`, `LOG_FORMAT`    | todos                | `info`, `text` (o `json`) |
 | `GIN_MODE`                   | todos                | `debug` (usar `release` en producción) |
 | `ALLOWED_ORIGINS`            | gateway, realtime    | `http://localhost:5173`  |
-| `PRESENTATIONS_URL`          | gateway, realtime    | `http://localhost:8081`  |
+| `PRESENTATIONS_URL`          | gateway, realtime, rooms | `http://localhost:8081` |
 | `REALTIME_URL`               | gateway              | `http://localhost:8082`  |
+| `ROOMS_URL`                  | gateway              | `http://localhost:8083`  |
 | `UPLOAD_DIR`                 | presentations        | `./uploads`              |
 | `MAX_UPLOAD_MB`              | presentations        | `10` (tamaño máximo del archivo subido) |
 | `MAX_SLIDES`                 | presentations        | `500` (diapositivas o páginas por presentación) |
@@ -198,6 +282,9 @@ la carpeta de subidas (`UPLOAD_DIR`) y el tamaño máximo de archivo en MB (`MAX
 | `MAX_CONCURRENT_CONVERSIONS` | presentations        | `2`                      |
 | `RENDER_MAX_PX`              | presentations        | `1920` (lado mayor del PNG) |
 | `SESSION_IDLE_TTL`           | realtime             | `24h` (`0` = nunca liberar) |
+| `DATABASE_URL`               | rooms                | `postgres://spd:spd@localhost:5432/spd?sslmode=disable` |
+| `DB_MAX_CONNS`               | rooms                | `10` (conexiones del pool) |
+| `TEST_DATABASE_URL`          | tests de rooms       | sin definir: se omiten los tests de PostgreSQL |
 
 `ALLOWED_ORIGINS` acepta una lista separada por comas. En producción debe contener solo el
 dominio real del frontend; definida vacía, solo se admite el mismo origen.
@@ -229,6 +316,56 @@ LibreOffice instalado. Las conversiones simultáneas de ambos formatos están li
 como mucho `MAX_SLIDES` + 1 páginas. Si se agota el tiempo, se mata el grupo de procesos
 completo, sin dejar `soffice.bin` huérfanos.
 
+**Capas de `rooms`.** `domain` tiene las entidades, las reglas (validaciones, hash de secretos,
+clave de ingreso, diapositivas válidas) y los casos de uso, y no conoce GORM: declara las
+interfaces que necesita, `Store` y `Catalog`. `store` implementa `Store` con GORM y PostgreSQL,
+`catalog` implementa `Catalog` con la API de `presentations` y `api` traduce HTTP a casos de
+uso. `main.go` los conecta.
+
+**Base de datos (`rooms`).** GORM sobre pgx, todo dentro de `store`. Al arrancar, `AutoMigrate`
+crea o actualiza las tablas, los índices y las claves foráneas. Los nombres del modelo pasan a
+inglés, como el resto del código:
+
+| Modelo         | Tabla           | Columnas                                                              |
+|----------------|-----------------|-----------------------------------------------------------------------|
+| Usuario        | `users`         | `id`, `full_name`, `email`, `password_hash`, `roles text[]`           |
+| DetalleSala    | `room_members`  | `user_id` y `room_id`: clave primaria compuesta y claves foráneas     |
+| DetalleGrupo   | `group_members` | `user_id` y `group_id`: clave primaria compuesta y claves foráneas (n:m) |
+| Sala           | `rooms`         | `id`, `name`, `url`, `access_key_hash`                                |
+| Grupo          | `groups`        | `id`, `room_id` (FK), `limit` (cupo), `priority` (prioridad de paso)  |
+| Presentacion   | `presentations` | `id uuid` (el del servicio presentations), `group_id` (FK), `slides integer[]` |
+
+Todas las tablas tienen `created_at` y `deleted_at` (y, salvo `room_members` y `group_members`,
+`updated_at`).
+
+**Borrado lógico.** `DELETE` marca la fila con `deleted_at` y todas las consultas excluyen las
+filas marcadas. Como la fila sigue existiendo, las claves foráneas no propagan el borrado, así
+que:
+
+- El servicio borra en cascada él mismo, en una transacción: sala → grupos (con sus
+  presentaciones e integrantes) y miembros; grupo → presentaciones e integrantes; usuario →
+  pertenencias a salas y grupos. Quien sale de una sala sale también de sus grupos.
+- Cada alta bloquea a su padre con `SELECT … FOR SHARE` hasta terminar. Así, un alta concurrente
+  no deja un hijo colgando de un padre recién borrado.
+- El alta de un integrante bloquea el grupo con `FOR UPDATE`: las altas en un grupo pasan de a
+  una, así dos no pueden ocupar a la vez la última plaza del cupo. También bloquea con
+  `FOR SHARE` la pertenencia a la sala, así nadie queda en un grupo sin ser miembro de su sala.
+- El correo es único solo entre los usuarios no borrados (índice único parcial
+  `WHERE deleted_at IS NULL`; el servicio lo guarda en minúsculas): borrar un usuario libera su
+  correo.
+- `room_members`, `group_members` y `presentations` tienen clave natural, que no se puede
+  repetir: volver a una sala o a un grupo, o reasignar una presentación quitada, reactiva la misma
+  fila
+  (`INSERT … ON CONFLICT … DO UPDATE … WHERE deleted_at IS NOT NULL`).
+
+**Secretos.** Contraseñas y claves de ingreso se guardan como hash bcrypt y nunca salen en las
+respuestas ni en los logs: GORM registra solo las consultas lentas o fallidas, y sin valores.
+
+**Presentaciones de `rooms`.** No hay clave foránea hacia `presentations`, porque está en otro
+servicio. Al asignar una presentación o cambiar sus diapositivas, `rooms` consulta a
+`presentations`: si no existe responde 422, y si las diapositivas no están en el rango
+`1..slide_count`, 400.
+
 **Apagado ordenado.** Ante SIGTERM, cada servicio deja de aceptar conexiones y espera a las
 peticiones en curso. `realtime` además envía a cada visor un cierre 1001. Si un visor no lo
 confirma en 3 s, cierra su conexión de forma forzada.
@@ -243,3 +380,10 @@ confirma en 3 s, cierra su conexión de forma forzada.
   bus compartido (Redis Pub/Sub, NATS).
 - LibreOffice y pdftoppm procesan documentos no confiables. En producción conviene ejecutar
   `presentations` en un contenedor aislado y sin salida a internet.
+- **La API de `rooms` no tiene autenticación.** Cualquiera puede crear, modificar o borrar
+  usuarios y salas, y nada limita los intentos de adivinar la clave de ingreso. Antes de
+  producción hace falta un inicio de sesión (p. ej. con JWT), autorización según los roles del
+  usuario y límite de intentos.
+- Los listados de `rooms` no están paginados.
+- `AutoMigrate` solo añade tablas, columnas e índices. Para renombrar o borrar columnas hacen
+  falta migraciones versionadas (p. ej. goose o golang-migrate).

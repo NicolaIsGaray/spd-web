@@ -19,6 +19,7 @@ import (
 type Upstreams struct {
 	Presentations *url.URL
 	Realtime      *url.URL
+	Rooms         *url.URL
 }
 
 // Register publica la tabla de rutas de la API.
@@ -26,6 +27,7 @@ func Register(r gin.IRouter, up Upstreams, log *slog.Logger) {
 	transport := newTransport()
 	presentations := gin.WrapH(newProxy(up.Presentations, "presentations", transport, log))
 	realtime := gin.WrapH(newProxy(up.Realtime, "realtime", transport, log))
+	rooms := gin.WrapH(newProxy(up.Rooms, "rooms", transport, log))
 
 	// Dominio "presentaciones": subida, metadatos e imágenes.
 	r.POST("/api/presentations/upload", presentations)
@@ -35,6 +37,39 @@ func Register(r gin.IRouter, up Upstreams, log *slog.Logger) {
 	// Dominio "tiempo real": control del presentador y WebSocket de los visores.
 	r.POST("/api/presentations/:id/control", realtime)
 	r.GET("/ws/presentation/:id", realtime)
+
+	// Dominio "salas": usuarios, salas y sus miembros, grupos y sus integrantes, presentaciones
+	// asignadas.
+	r.POST("/api/users", rooms)
+	r.GET("/api/users", rooms)
+	r.GET("/api/users/:id", rooms)
+	r.PATCH("/api/users/:id", rooms)
+	r.DELETE("/api/users/:id", rooms)
+	r.GET("/api/users/:id/rooms", rooms)
+	r.GET("/api/users/:id/groups", rooms)
+
+	r.POST("/api/rooms", rooms)
+	r.GET("/api/rooms", rooms)
+	r.GET("/api/rooms/:id", rooms)
+	r.PATCH("/api/rooms/:id", rooms)
+	r.DELETE("/api/rooms/:id", rooms)
+	r.GET("/api/rooms/:id/members", rooms)
+	r.POST("/api/rooms/:id/members", rooms)
+	r.DELETE("/api/rooms/:id/members/:user_id", rooms)
+	r.GET("/api/rooms/:id/groups", rooms)
+	r.POST("/api/rooms/:id/groups", rooms)
+
+	r.GET("/api/groups/:id", rooms)
+	r.PATCH("/api/groups/:id", rooms)
+	r.DELETE("/api/groups/:id", rooms)
+	r.GET("/api/groups/:id/members", rooms)
+	r.POST("/api/groups/:id/members", rooms)
+	r.DELETE("/api/groups/:id/members/:user_id", rooms)
+	r.GET("/api/groups/:id/presentations", rooms)
+	r.POST("/api/groups/:id/presentations", rooms)
+	r.GET("/api/groups/:id/presentations/:presentation_id", rooms)
+	r.PATCH("/api/groups/:id/presentations/:presentation_id", rooms)
+	r.DELETE("/api/groups/:id/presentations/:presentation_id", rooms)
 }
 
 // newProxy crea un proxy inverso hacia target. httputil.ReverseProxy soporta de forma nativa
