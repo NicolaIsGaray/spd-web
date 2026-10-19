@@ -96,17 +96,12 @@ func (s *Store) AddRoomMember(ctx context.Context, roomID, userID uint, admit fu
 	return m.toDomain(), created, nil
 }
 
-func (s *Store) RoomMembers(ctx context.Context, roomID uint) ([]domain.User, error) {
+func (s *Store) RoomMembers(ctx context.Context, roomID uint) ([]domain.Member, error) {
 	db := s.db.WithContext(ctx)
 	if err := take(db, &room{}, domain.ErrRoomNotFound, "id = ?", roomID); err != nil {
 		return nil, err
 	}
-	var rows []user
-	err := db.Select("users.*").
-		Joins("JOIN room_members ON room_members.user_id = users.id AND room_members.deleted_at IS NULL").
-		Where("room_members.room_id = ?", roomID).
-		Order("users.id").Find(&rows).Error
-	return mapList(rows, user.toDomain), err
+	return members(db, "room_members", "room_id", roomID)
 }
 
 // RemoveRoomMember saca al usuario de la sala y de los grupos de esa sala.

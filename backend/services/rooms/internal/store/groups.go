@@ -131,17 +131,12 @@ func (s *Store) AddGroupMember(ctx context.Context, groupID, userID uint) (domai
 	return m.toDomain(), created, nil
 }
 
-func (s *Store) GroupMembers(ctx context.Context, groupID uint) ([]domain.User, error) {
+func (s *Store) GroupMembers(ctx context.Context, groupID uint) ([]domain.Member, error) {
 	db := s.db.WithContext(ctx)
 	if err := take(db, &group{}, domain.ErrGroupNotFound, "id = ?", groupID); err != nil {
 		return nil, err
 	}
-	var rows []user
-	err := db.Select("users.*").
-		Joins("JOIN group_members ON group_members.user_id = users.id AND group_members.deleted_at IS NULL").
-		Where("group_members.group_id = ?", groupID).
-		Order("users.id").Find(&rows).Error
-	return mapList(rows, user.toDomain), err
+	return members(db, "group_members", "group_id", groupID)
 }
 
 func (s *Store) RemoveGroupMember(ctx context.Context, groupID, userID uint) error {

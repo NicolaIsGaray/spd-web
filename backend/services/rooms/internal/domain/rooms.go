@@ -89,20 +89,40 @@ func (s *Service) DeleteRoom(ctx context.Context, id uint) error {
 // JoinRoom añade un usuario a una sala; si la sala tiene clave de ingreso, hay que darla. Para
 // quien ya es miembro no cambia nada (created = false); quien vuelve tras salir reactiva su
 // pertenencia.
+//
+// La clave se comprueba ANTES de la transacción: bcrypt tarda decenas de milisegundos a
+// propósito, y hacerlo con la sala bloqueada ocuparía una conexión del pool durante todo ese
+// tiempo (unos cuantos intentos de adivinar la clave dejarían sin conexiones al resto del
+// servicio). Dentro de la transacción basta ver que la clave no cambió entretanto.
 func (s *Service) JoinRoom(ctx context.Context, roomID uint, in Join) (m RoomMember, created bool, err error) {
 	if in.UserID == 0 {
 		return RoomMember{}, false, invalid("user_id es obligatorio")
 	}
-	return s.store.AddRoomMember(ctx, roomID, in.UserID, func(r Room) error {
-		if r.HasAccessKey() && bcrypt.CompareHashAndPassword([]byte(r.AccessKeyHash), []byte(in.AccessKey)) != nil {
-			return ErrWrongAccessKey
+	r, err := s.store.GetRoom(ctx, roomID)
+	if err != nil {
+		return RoomMember{}, false, err
+	}
+	if err := checkAccessKey(r, in.AccessKey); err != nil {
+		return RoomMember{}, false, err
+	}
+	return s.store.AddRoomMember(ctx, roomID, in.UserID, func(locked Room) error {
+		if locked.AccessKeyHash == r.AccessKeyHash {
+			return nil // la misma clave que ya se comprobó
 		}
-		return nil
+		return checkAccessKey(locked, in.AccessKey) // la clave cambió entretanto (raro)
 	})
 }
 
-// RoomMembers devuelve los usuarios miembros de una sala, ordenados por id.
-func (s *Service) RoomMembers(ctx context.Context, roomID uint) ([]User, error) {
+// checkAccessKey devuelve ErrWrongAccessKey si la sala tiene clave y key no es la correcta.
+func checkAccessKey(r Room, key string) error {
+	if r.HasAccessKey() && bcrypt.CompareHashAndPassword([]byte(r.AccessKeyHash), []byte(key)) != nil {
+		return ErrWrongAccessKey
+	}
+	return nil
+}
+
+// RoomMembers devuelve los miembros de una sala, ordenados por id.
+func (s *Service) RoomMembers(ctx context.Context, roomID uint) ([]Member, error) {
 	return s.store.RoomMembers(ctx, roomID)
 }
 

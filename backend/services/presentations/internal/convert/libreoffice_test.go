@@ -287,14 +287,15 @@ func TestTimeoutKillsTheWholeProcessGroup(t *testing.T) {
 	assertNoOrphans(t, lo.profileRoot)
 }
 
-// Lo mismo con LibreOffice real: un perfil nuevo tarda varios segundos en inicializarse, así
-// que 1,5 s garantiza que el timeout llega a mitad de la conversión.
+// Lo mismo con LibreOffice real. En una máquina rápida, un perfil nuevo se inicializa y
+// convierte el PPTX en poco más de un segundo, así que 300 ms garantizan que el timeout llega
+// a mitad de la conversión, con soffice.bin ya lanzado.
 func TestTimeoutWithRealLibreOffice(t *testing.T) {
 	requireBinaries(t, "soffice", "pdftoppm")
 	if runtime.GOOS != "linux" {
 		t.Skip("la comprobación de procesos huérfanos usa /proc")
 	}
-	lo := newConverter(t, Options{MaxConcurrent: 1, Timeout: 1500 * time.Millisecond})
+	lo := newConverter(t, Options{MaxConcurrent: 1, Timeout: 300 * time.Millisecond})
 	src := copyFixture(t)
 
 	_, err := lo.ToImages(context.Background(), src, filepath.Dir(src), 100)

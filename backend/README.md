@@ -160,8 +160,8 @@ curl -X POST -H 'Content-Type: application/json' -d '{"action":"next"}' \
 | `{"action": "goto", "slide": 3}`      | Igual que la anterior                     |
 
 Responde 200 con el estado resultante, con el mismo formato que el mensaje del WebSocket.
-Responde 400 si el comando es inválido o la diapositiva está fuera de rango, y 404 si la
-presentación no existe.
+Responde 400 si el comando es inválido o la diapositiva está fuera de rango, 404 si la
+presentación no existe y 413 si el cuerpo supera 1 KB.
 
 ### `GET /ws/presentation/:id` (WebSocket)
 
@@ -199,11 +199,11 @@ lo borrado deja de verse en la API, pero sigue en la base de datos.
 | `/api/users/:id/groups`                          | `GET`                    | Grupos de los que es integrante                                 |
 | `/api/rooms`                                     | `GET`, `POST`            | Salas                                                           |
 | `/api/rooms/:id`                                 | `GET`, `PATCH`, `DELETE` | Una sala (borrarla borra sus grupos, presentaciones y miembros) |
-| `/api/rooms/:id/members`                         | `GET`, `POST`            | Miembros (`GET` devuelve usuarios; `POST` une a uno)            |
+| `/api/rooms/:id/members`                         | `GET`, `POST`            | Miembros (`GET` los lista, ver abajo; `POST` une a uno)         |
 | `/api/rooms/:id/members/:user_id`                | `DELETE`                 | Saca a un usuario de la sala y de sus grupos                    |
 | `/api/rooms/:id/groups`                          | `GET`, `POST`            | Grupos de la sala, en orden de paso para presentar              |
 | `/api/groups/:id`                                | `GET`, `PATCH`, `DELETE` | Un grupo (borrarlo borra sus presentaciones e integrantes)      |
-| `/api/groups/:id/members`                        | `GET`, `POST`            | Integrantes (`GET` devuelve usuarios; `POST` une a uno)         |
+| `/api/groups/:id/members`                        | `GET`, `POST`            | Integrantes (`GET` los lista, ver abajo; `POST` une a uno)      |
 | `/api/groups/:id/members/:user_id`               | `DELETE`                 | Saca a un usuario del grupo                                     |
 | `/api/groups/:id/presentations`                  | `GET`, `POST`            | Presentaciones asignadas al grupo                               |
 | `/api/groups/:id/presentations/:presentation_id` | `GET`, `PATCH`, `DELETE` | Una presentación asignada                                       |
@@ -234,6 +234,14 @@ curl -X POST -H 'Content-Type: application/json' \
 ```json
 {"presentation_id": "0b8e4c3e-7f4a-4f0e-8d55-2f8f0f6a9b22", "group_id": 3, "slides": [1, 2, 5],
  "created_at": "2026-10-09T12:00:00Z", "updated_at": "2026-10-09T12:00:00Z"}
+```
+
+Los listados de miembros de una sala y de integrantes de un grupo muestran a cada usuario
+solo lo que necesitan ver los demás: sin su correo ni las fechas de su cuenta, que solo
+devuelven `/api/users` y `/api/users/:id`. `joined_at` es cuándo entró.
+
+```json
+[{"id": 1, "full_name": "Ana López", "roles": ["presentador"], "joined_at": "2026-10-09T12:00:00Z"}]
 ```
 
 | Estado | Motivo                                                                                                                                      |

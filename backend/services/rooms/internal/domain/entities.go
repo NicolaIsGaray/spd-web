@@ -44,6 +44,16 @@ func (r Room) MarshalJSON() ([]byte, error) {
 	}{plain(r), r.HasAccessKey()})
 }
 
+// Member es un miembro de una sala o un integrante de un grupo, visto desde ella: solo lo que
+// necesitan ver los demás. El correo y las fechas de la cuenta quedan fuera, son del propio
+// usuario (GET /api/users/:id). JoinedAt es cuándo entró.
+type Member struct {
+	ID       uint      `json:"id"`
+	FullName string    `json:"full_name"`
+	Roles    []string  `json:"roles"`
+	JoinedAt time.Time `json:"joined_at"`
+}
+
 // RoomMember es la pertenencia de un usuario a una sala (DetalleSala).
 type RoomMember struct {
 	UserID   uint      `json:"user_id"`

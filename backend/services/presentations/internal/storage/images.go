@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"spd.web/internal/platform"
 )
 
 var (
@@ -97,7 +99,7 @@ func WriteFile(path string, r io.Reader, limit int64) (int64, error) {
 		return n, err
 	}
 	if n > limit {
-		return n, fmt.Errorf("%w: el archivo supera %s", ErrLimitExceeded, FormatBytes(limit))
+		return n, fmt.Errorf("%w: el archivo supera %s", ErrLimitExceeded, platform.FormatBytes(limit))
 	}
 	return n, nil
 }
@@ -149,13 +151,4 @@ func sniffFile(path string) (string, error) {
 		return "", fmt.Errorf("%w: %q no es una imagen válida", ErrInvalidFile, filepath.Base(path))
 	}
 	return ext, nil
-}
-
-// FormatBytes formatea un tamaño para mensajes de error ("100 MB").
-func FormatBytes(n int64) string {
-	const mb = 1 << 20
-	if n >= mb && n%mb == 0 {
-		return fmt.Sprintf("%d MB", n/mb)
-	}
-	return fmt.Sprintf("%d bytes", n)
 }

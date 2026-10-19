@@ -142,6 +142,7 @@ func TestRequestErrors(t *testing.T) {
 		{"JSON mal formado", http.MethodPost, "/api/rooms", `{"name":`, http.StatusBadRequest, "JSON mal formado"},
 		{"sin cuerpo", http.MethodPost, "/api/rooms", nil, http.StatusBadRequest, "falta el cuerpo"},
 		{"datos de más", http.MethodPost, "/api/rooms", `{"name":"a"} {"name":"b"}`, http.StatusBadRequest, "después del objeto"},
+		{"cuerpo que no es un objeto", http.MethodPost, "/api/rooms", `[]`, http.StatusBadRequest, "el cuerpo debe ser un objeto JSON"},
 		{"cuerpo enorme", http.MethodPost, "/api/rooms", `{"name":"` + strings.Repeat("a", 2<<20) + `"}`, http.StatusRequestEntityTooLarge, "1 MB"},
 		{"ruta inexistente", http.MethodGet, "/api/salas", nil, http.StatusNotFound, "ruta no encontrada"},
 	}
@@ -179,7 +180,9 @@ func TestRoomsGroupsAndPresentations(t *testing.T) {
 	}
 	want(t, srv, http.StatusOK, http.MethodPost, members, map[string]any{"user_id": uid, "access_key": "1234"})
 	want(t, srv, http.StatusNotFound, http.MethodPost, members, map[string]any{"user_id": 9999, "access_key": "1234"})
-	if _, data := call(t, srv, http.MethodGet, members, nil); !bytes.Contains(data, []byte(`"email":"ana@example.com"`)) {
+	// Los demás ven el nombre y los roles de cada miembro, nunca su correo.
+	if _, data := call(t, srv, http.MethodGet, members, nil); !bytes.Contains(data, []byte(`"full_name":"Ana"`)) ||
+		!bytes.Contains(data, []byte(`"joined_at"`)) || bytes.Contains(data, []byte("email")) || bytes.Contains(data, []byte("password")) {
 		t.Fatalf("miembros = %s", data)
 	}
 	if _, data := call(t, srv, http.MethodGet, fmt.Sprintf("/api/users/%v/rooms", uid), nil); !bytes.Contains(data, []byte(`"name":"Clase 1"`)) {
@@ -261,7 +264,8 @@ func TestGroupMemberEndpoints(t *testing.T) {
 	want(t, srv, http.StatusConflict, http.MethodPatch, "/api/groups/"+gid, map[string]any{"limit": 1})
 	want(t, srv, http.StatusNotFound, http.MethodPost, "/api/groups/9999/members", map[string]any{"user_id": ana})
 
-	if _, data := call(t, srv, http.MethodGet, members, nil); !bytes.Contains(data, []byte(`"email":"beto@example.com"`)) {
+	if _, data := call(t, srv, http.MethodGet, members, nil); !bytes.Contains(data, []byte(`"full_name":"beto@example.com"`)) ||
+		bytes.Contains(data, []byte(`"email"`)) {
 		t.Fatalf("integrantes = %s", data)
 	}
 	if _, data := call(t, srv, http.MethodGet, fmt.Sprintf("/api/users/%v/groups", ana), nil); !bytes.Contains(data, []byte(`"id":`+gid)) {

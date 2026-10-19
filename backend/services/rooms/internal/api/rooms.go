@@ -67,8 +67,8 @@ func (h *Handler) roomMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	users, err := h.svc.RoomMembers(c.Request.Context(), id)
-	h.reply(c, http.StatusOK, users, err)
+	members, err := h.svc.RoomMembers(c.Request.Context(), id)
+	h.reply(c, http.StatusOK, members, err)
 }
 
 // joinRoom atiende POST /api/rooms/:id/members: 201 si el usuario entra (o vuelve) a la sala,

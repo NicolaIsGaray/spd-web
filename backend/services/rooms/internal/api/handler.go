@@ -4,14 +4,10 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -86,42 +82,9 @@ func presentationParam(c *gin.Context) (string, bool) {
 	return id, ok
 }
 
-// bind decodifica el cuerpo JSON en dst y, si no puede, responde 400 (o 413). Rechaza los
-// campos desconocidos: un "fullname" mal escrito no debe ignorarse en silencio.
+// bind decodifica el cuerpo JSON en dst y, si no puede, responde 400 (o 413).
 func bind(c *gin.Context, dst any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes))
-	dec.DisallowUnknownFields()
-	err := dec.Decode(dst)
-	if err == nil && dec.More() {
-		err = errors.New("hay datos después del objeto JSON")
-	}
-	if err == nil {
-		return true
-	}
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
-		platform.WriteError(c, http.StatusRequestEntityTooLarge, "el cuerpo supera 1 MB")
-	} else {
-		platform.WriteError(c, http.StatusBadRequest, "cuerpo JSON inválido: "+jsonError(err))
-	}
-	return false
-}
-
-// jsonError describe en español los errores habituales de encoding/json.
-func jsonError(err error) string {
-	var typeErr *json.UnmarshalTypeError
-	var syntaxErr *json.SyntaxError
-	switch {
-	case errors.Is(err, io.EOF):
-		return "falta el cuerpo"
-	case errors.As(err, &typeErr):
-		return fmt.Sprintf("el campo %s debe ser de tipo %s", typeErr.Field, typeErr.Type)
-	case errors.As(err, &syntaxErr), errors.Is(err, io.ErrUnexpectedEOF):
-		return "JSON mal formado"
-	case strings.HasPrefix(err.Error(), "json: unknown field "):
-		return "campo desconocido " + strings.TrimPrefix(err.Error(), "json: unknown field ")
-	}
-	return err.Error()
+	return platform.BindJSON(c, dst, maxBodyBytes)
 }
 
 // reply responde con v en JSON, o traduce err si lo hay.

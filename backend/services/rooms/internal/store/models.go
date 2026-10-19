@@ -121,6 +121,31 @@ func (p presentation) toDomain() domain.Presentation {
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
+// memberRow es un usuario unido a su pertenencia (room_members o group_members): las columnas de
+// domain.Member, sin leer el correo ni el hash de la contraseña.
+type memberRow struct {
+	ID       uint
+	FullName string
+	Roles    Array[string]
+	JoinedAt time.Time
+}
+
+func (m memberRow) toDomain() domain.Member {
+	return domain.Member{ID: m.ID, FullName: m.FullName, Roles: nonNil(m.Roles), JoinedAt: m.JoinedAt}
+}
+
+// members lista los usuarios (no borrados) con pertenencia activa en table (room_members o
+// group_members) para parentID, ordenados por id.
+func members(db *gorm.DB, table, parentColumn string, parentID uint) ([]domain.Member, error) {
+	var rows []memberRow
+	err := db.Model(&user{}).
+		Select("users.id, users.full_name, users.roles, "+table+".created_at AS joined_at").
+		Joins("JOIN "+table+" ON "+table+".user_id = users.id AND "+table+".deleted_at IS NULL").
+		Where(table+"."+parentColumn+" = ?", parentID).
+		Order("users.id").Scan(&rows).Error
+	return mapList(rows, memberRow.toDomain), err
+}
+
 // mapList convierte una lista de filas con f, p. ej. mapList(rows, user.toDomain). Nunca
 // devuelve nil: en JSON, una lista vacía es [].
 func mapList[R, D any](rows []R, f func(R) D) []D {

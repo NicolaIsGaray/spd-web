@@ -174,7 +174,7 @@ func (h *Handler) fail(c *gin.Context, err error) {
 	switch {
 	case errors.As(err, &tooBig):
 		platform.WriteError(c, http.StatusRequestEntityTooLarge,
-			"el archivo supera el máximo permitido ("+storage.FormatBytes(h.maxUploadBytes)+")")
+			"el archivo supera el máximo permitido ("+platform.FormatBytes(h.maxUploadBytes)+")")
 	case errors.Is(err, presentation.ErrLimitExceeded):
 		platform.WriteError(c, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, presentation.ErrUnsupportedFormat):

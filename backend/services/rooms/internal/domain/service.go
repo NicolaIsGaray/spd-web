@@ -57,7 +57,7 @@ type Store interface {
 	// AddRoomMember une a un usuario a una sala. admit recibe la sala, bloqueada mientras dura el
 	// alta, y decide si el usuario puede entrar. created es false si ya era miembro.
 	AddRoomMember(ctx context.Context, roomID, userID uint, admit func(Room) error) (m RoomMember, created bool, err error)
-	RoomMembers(ctx context.Context, roomID uint) ([]User, error)
+	RoomMembers(ctx context.Context, roomID uint) ([]Member, error)
 	RemoveRoomMember(ctx context.Context, roomID, userID uint) error
 
 	CreateGroup(ctx context.Context, g Group) (Group, error)
@@ -68,7 +68,7 @@ type Store interface {
 	DeleteGroup(ctx context.Context, id uint) error
 	// AddGroupMember une a un usuario a un grupo. created es false si ya era integrante.
 	AddGroupMember(ctx context.Context, groupID, userID uint) (m GroupMember, created bool, err error)
-	GroupMembers(ctx context.Context, groupID uint) ([]User, error)
+	GroupMembers(ctx context.Context, groupID uint) ([]Member, error)
 	RemoveGroupMember(ctx context.Context, groupID, userID uint) error
 	UserGroups(ctx context.Context, userID uint) ([]Group, error)
 

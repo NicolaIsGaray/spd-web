@@ -37,7 +37,7 @@ func run(log *slog.Logger, env *platform.Env) error {
 	addr := env.String("HTTP_ADDR", ":8081")
 	uploadDir := env.String("UPLOAD_DIR", "./uploads")
 	limits := storage.Limits{
-		MaxUploadBytes: int64(env.Int("MAX_UPLOAD_MB", 100)) * mb,
+		MaxUploadBytes: int64(env.Int("MAX_UPLOAD_MB", 10)) * mb,
 		MaxSlides:      env.Int("MAX_SLIDES", 500),
 		MaxTotalBytes:  int64(env.Int("MAX_EXTRACTED_MB", 1024)) * mb,
 		MaxEntries:     10_000,
@@ -57,7 +57,7 @@ func run(log *slog.Logger, env *platform.Env) error {
 	if err != nil {
 		return err
 	}
-	log.Info("almacenamiento listo", "dir", store.Root(), "max_upload", storage.FormatBytes(limits.MaxUploadBytes))
+	log.Info("almacenamiento listo", "dir", store.Root(), "max_upload", platform.FormatBytes(limits.MaxUploadBytes))
 
 	conv, err := convert.NewLibreOffice(convOpts)
 	if err != nil {

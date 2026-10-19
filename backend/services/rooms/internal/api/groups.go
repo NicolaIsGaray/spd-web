@@ -48,8 +48,8 @@ func (h *Handler) groupMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	users, err := h.svc.GroupMembers(c.Request.Context(), id)
-	h.reply(c, http.StatusOK, users, err)
+	members, err := h.svc.GroupMembers(c.Request.Context(), id)
+	h.reply(c, http.StatusOK, members, err)
 }
 
 // joinGroup atiende POST /api/groups/:id/members: 201 si el usuario entra (o vuelve) al grupo,

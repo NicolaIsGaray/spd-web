@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"spd.web/internal/platform"
 	"spd.web/services/presentations/internal/convert"
 	"spd.web/services/presentations/internal/storage"
 )
@@ -205,7 +206,7 @@ func checkPPTX(path string, lim storage.Limits) error {
 		found = found || f.Name == "ppt/presentation.xml"
 	}
 	if declared > uint64(lim.MaxTotalBytes) {
-		return fmt.Errorf("%w: el PPTX descomprimido ocuparía más de %s", ErrLimitExceeded, storage.FormatBytes(lim.MaxTotalBytes))
+		return fmt.Errorf("%w: el PPTX descomprimido ocuparía más de %s", ErrLimitExceeded, platform.FormatBytes(lim.MaxTotalBytes))
 	}
 	if !found {
 		return fmt.Errorf("%w: no es un PPTX válido (falta ppt/presentation.xml)", ErrInvalidFile)

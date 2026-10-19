@@ -82,8 +82,8 @@ func (s *Service) JoinGroup(ctx context.Context, groupID uint, in GroupJoin) (m 
 	return s.store.AddGroupMember(ctx, groupID, in.UserID)
 }
 
-// GroupMembers devuelve los usuarios integrantes de un grupo, ordenados por id.
-func (s *Service) GroupMembers(ctx context.Context, groupID uint) ([]User, error) {
+// GroupMembers devuelve los integrantes de un grupo, ordenados por id.
+func (s *Service) GroupMembers(ctx context.Context, groupID uint) ([]Member, error) {
 	return s.store.GroupMembers(ctx, groupID)
 }
 

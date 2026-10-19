@@ -4,7 +4,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -127,10 +126,7 @@ func (h *Handler) control(c *gin.Context) {
 	}
 
 	var req controlRequest
-	dec := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, maxControlBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		platform.WriteError(c, http.StatusBadRequest, "JSON inválido: "+err.Error())
+	if !platform.BindJSON(c, &req, maxControlBody) {
 		return
 	}
 	cmd, err := req.command()

@@ -163,6 +163,8 @@ func TestControlValidation(t *testing.T) {
 		want           int
 	}{
 		{"JSON roto", pid, `{"action":`, http.StatusBadRequest},
+		{"datos de más", pid, `{"action": "next"} {"action": "next"}`, http.StatusBadRequest},
+		{"cuerpo enorme", pid, `{"action": "next", "x": "` + strings.Repeat("a", maxControlBody) + `"}`, http.StatusRequestEntityTooLarge},
 		{"campo desconocido", pid, `{"slide_idx": 2}`, http.StatusBadRequest},
 		{"acción desconocida", pid, `{"action": "jump"}`, http.StatusBadRequest},
 		{"next con número", pid, `{"action": "next", "slide": 2}`, http.StatusBadRequest},

@@ -1,7 +1,9 @@
 package platform
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -172,6 +174,53 @@ func TestCanonicalUUID(t *testing.T) {
 	for _, in := range []string{"", "..", "../etc/passwd", "6f1c1a52", want + "/x"} {
 		if _, ok := CanonicalUUID(in); ok {
 			t.Fatalf("CanonicalUUID(%q) debería fallar", in)
+		}
+	}
+}
+
+func TestBindJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	type body struct {
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+	cases := []struct {
+		name, in string
+		status   int
+		msg      string // fragmento esperado del mensaje de error
+	}{
+		{"válido", `{"name":"a","count":1}`, http.StatusOK, ""},
+		{"sin cuerpo", ``, http.StatusBadRequest, "falta el cuerpo"},
+		{"mal formado", `{"name":`, http.StatusBadRequest, "JSON mal formado"},
+		{"campo desconocido", `{"nombre":"a"}`, http.StatusBadRequest, `campo desconocido "nombre"`},
+		{"tipo incorrecto", `{"count":"uno"}`, http.StatusBadRequest, "el campo count debe ser de tipo int"},
+		{"no es un objeto", `[1,2]`, http.StatusBadRequest, "el cuerpo debe ser un objeto JSON"},
+		{"datos de más", `{"name":"a"} {"name":"b"}`, http.StatusBadRequest, "después del objeto"},
+		{"demasiado grande", `{"name":"` + strings.Repeat("a", 2<<10) + `"}`, http.StatusRequestEntityTooLarge, "el cuerpo supera 1 KB"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.in))
+			var dst body
+			ok := BindJSON(c, &dst, 1<<10)
+			var resp map[string]string
+			_ = json.Unmarshal(w.Body.Bytes(), &resp)
+			if ok != (tc.status == http.StatusOK) || (!ok && (w.Code != tc.status || !strings.Contains(resp["error"], tc.msg))) {
+				t.Fatalf("ok = %v, %d %s; se esperaba %d con %q", ok, w.Code, w.Body, tc.status, tc.msg)
+			}
+			if strings.Contains(resp["error"], "platform.") {
+				t.Fatalf("el mensaje expone un tipo interno: %s", resp["error"])
+			}
+		})
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	for n, want := range map[int64]string{10 << 20: "10 MB", 1 << 10: "1 KB", 1536: "1536 bytes", 100: "100 bytes"} {
+		if got := FormatBytes(n); got != want {
+			t.Fatalf("FormatBytes(%d) = %q, se esperaba %q", n, got, want)
 		}
 	}
 }
