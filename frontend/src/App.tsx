@@ -5,6 +5,7 @@ import RoomsPage from "./pages/RoomsPage"
 import RoomPage from "./pages/RoomPage"
 import LivePage from "./pages/LivePage"
 import GuestJoinPage from "./pages/GuestJoinPage"
+import CreateRoomPage from "./pages/CreateRoomPage"
 import RegisterPage from "./pages/RegisterPage"
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/registro" element={<RegisterPage />} />
         <Route path="/unirse" element={<GuestJoinPage />} />
         <Route path="/salas" element={<RoomsPage />} />
+        <Route path="/salas/nueva" element={<CreateRoomPage />} />
         <Route path="/salas/:id" element={<RoomPage />} />
         <Route path="/salas/:id/en-vivo" element={<LivePage />} />
         <Route path="*" element={<Navigate to="/login" replace />} />

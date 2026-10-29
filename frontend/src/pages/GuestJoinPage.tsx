@@ -13,9 +13,12 @@ export default function GuestJoinPage() {
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    // TODO: validar la clave contra el back y unirse a la sala real.
-    signIn(name)
+    signIn({ name })
     navigate("/salas/4")
+    // TODO: unirse de verdad requiere el id de la sala: el backend no tiene "unirse por clave"
+    // (POST /api/rooms/:id/members necesita :id y verifica la clave con bcrypt). Definir con el
+    // back si el enlace de invitación lleva el id (p. ej. /unirse?room=4) o se agrega búsqueda
+    // por clave.
   }
 
   return (

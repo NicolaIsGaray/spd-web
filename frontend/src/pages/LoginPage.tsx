@@ -14,7 +14,7 @@ export default function LoginPage() {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     // TODO: autenticar contra el back cuando exista el endpoint de login.
-    signIn(email.split("@")[0])
+    signIn({ name: email.split("@")[0] })
     navigate("/salas")
   }
 
